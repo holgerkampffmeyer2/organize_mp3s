@@ -1,5 +1,7 @@
 # MP3/M4A Organizer
 
+![Illustration](./assets/organize_mp3s.png)
+
 AI-agent driven MP3/M4A organization with online genre lookup, metadata-based sorting, and configurable destination mapping. Designed to be controlled by AI coding assistants like [opencode](https://opencode.ai) or Claude Code.
 
 ## How It Works
