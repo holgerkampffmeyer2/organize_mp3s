@@ -60,6 +60,8 @@ sudo apt install ffmpeg python3
 - **Metadata Source**: Artist and title from file metadata (ffprobe); Label from file metadata (ffprobe) or online lookup
 - **Genre Lookup**: iTunes Search API (primary), MusicBrainz API (fallback)
 - **Label Lookup**: iTunes Search API (when metadata missing, with track ID lookup)
+- **Sorting Priority**: Label mapping first, then Genre mapping as fallback
+- **Subgenre Hierarchy**: Subgenres automatically map to parent genres (e.g., "Electro House" → "House")
 - **Timeouts**: 5 seconds for ffprobe, 10 seconds for HTTP requests
 - **Output**: Files moved to genre-specific or label-specific folders as defined in config.json
 - **Logging**: JSON log of non-processed files (normal) or audit log (dry-run)
@@ -88,6 +90,7 @@ Create a `config.json` file in the same directory as the script:
 - The `label_map` works the same way as `genre_map` (keys can be comma-separated lists).
 - If `label_source_tag` is provided, the script will try to read that specific tag (and its uppercase variant) for the label.
 - If `label_source_tag` is not provided, the script checks common label-related tags: 'label', 'Label', 'TPUB', 'publisher'.
+- **Subgenre Support**: Subgenres like "Electro House", "Progressive House", "Dance", "Electronic" automatically map to "House" if configured.
 
 ## File Structure
 

@@ -48,8 +48,11 @@ If the target file already exists, the file is left in place and logged.
 4. **Label/Genre Normalization & Mapping**:
     - Normalize label/genre to lowercase.
     - Special case: if label/genre contains both "drum" and "bass" → map to "Drum n Base" (if present in config).
-    - **Priority**: Label mapping is checked first (if label available and label_map configured).
-    - Otherwise, look for exact match in `config.json` genre_map or label_map (keys are normalized to lowercase).
+    - **Priority**: 
+      1. Label mapping is checked first (if label available and label_map configured).
+      2. Genre mapping is used as fallback (always, regardless of label status).
+    - **Genre Hierarchy**: Subgenres are mapped to parent genres (e.g., "Electro House" → "House", "Progressive House" → "House").
+    - Look for match in `config.json` genre_map or label_map (keys are normalized to lowercase).
     - If no mapping found → leave file, log as `genre_not_mapped` or `label_not_mapped`.
 5. **Destination Check**:
     - Construct destination path: `<dest_dir>/<filename>`.
@@ -81,6 +84,7 @@ python3 organize_music.py -n [source_directory]
 ## Extensibility
 - To add new genres, add entries to `config.json` genre_map.
 - The script already supports comma-separated genre keys for mapping multiple genres to the same destination.
+- Subgenre hierarchy is automatically recognized (e.g., "Electro House" maps to "House" if configured).
 
 ## Notes
 - The script uses a timeout of 5 seconds for `ffprobe` calls and 10 seconds for HTTP requests to prevent hanging.
