@@ -4,7 +4,14 @@
     "House": "House",
     "Deep Techno": "House",
     "Techno": "House",
-    "Tech House": "House"
+    "Tech House": "House",
+    "Electro House": "House",
+    "Progressive House": "House",
+    "Deep House": "House",
+    "Future House": "House",
+    "Tropical House": "House",
+    "Dance": "House",
+    "Electronic": "House"
   },
   "label_map": {
     "MixCult Records": "House",

@@ -386,7 +386,9 @@ def find_genre_destination(genre: str, genre_to_dest: Dict[str, str]) -> Optiona
     Returns:
         Destination path if genre is mapped, None otherwise
     """
-    # Normalize genre for comparison
+    if not genre:
+        return None
+    
     normalized_genre = genre.lower().strip()
     
     # Special case: if genre contains both "drum" and "bass" -> map to "Drum n Base"
@@ -403,14 +405,52 @@ def find_genre_destination(genre: str, genre_to_dest: Dict[str, str]) -> Optiona
                 if normalized_genre == part.lower().strip():
                     return dest
     
+    # Subgenre hierarchy: extract parent genre and try again
+    parent_genre = _extract_parent_genre(normalized_genre)
+    if parent_genre and parent_genre != normalized_genre:
+        return find_genre_destination(parent_genre, genre_to_dest)
+    
+    return None
+
+
+def _extract_parent_genre(genre: str) -> Optional[str]:
+    """
+    Extract parent genre from a subgenre string.
+    
+    E.g., "Electro House" -> "House", "Progressive House" -> "House"
+    
+    Args:
+        genre: Normalized genre string
+        
+    Returns:
+        Parent genre string or None if no parent found
+    """
+    if not genre:
+        return None
+    
+    genre_lower = genre.lower()
+    
+    if 'drum' in genre_lower and 'bass' in genre_lower:
+        return 'drum n bass'
+    if 'house' in genre_lower:
+        return 'house'
+    if 'techno' in genre_lower:
+        return 'techno'
+    if 'trance' in genre_lower:
+        return 'trance'
+    if 'edm' in genre_lower:
+        return 'edm'
+    if 'dance' in genre_lower:
+        return 'dance'
+    if 'electronic' in genre_lower:
+        return 'electronic'
+    
     return None
 
 
 def determine_destination(
-    artist: str, 
-    title: str, 
-    label: Optional[str],           # Final label value (from metadata or online)
-    genre: Optional[str],           # Final genre value (from metadata or online)
+    label: Optional[str],
+    genre: Optional[str],
     label_to_dest: Dict[str, str], 
     genre_to_dest: Dict[str, str]
 ) -> Tuple[Optional[str], bool, bool, Optional[str], Optional[str]]:
@@ -420,16 +460,12 @@ def determine_destination(
     Assumes label and genre parameters already represent the final values
     (from metadata or online lookup, as determined by process_files).
     
-    Priority Logic (per User Request & AGENT.md):
+    Priority Logic:
     1. If label mapping configured and we have a label:
        a. Try to map the label to destination
        b. If successful, we're done (used_label = True)
-    2. If we have a label but label mapping didn't yield destination:
-       - Label mapping exhausted, we have a label but it's not mapped
-       - Prepare for label_not_mapped failure (used_label = False)
-    3. If no destination yet AND (no label mapping configured OR no label available):
-       a. If we have a genre, try to map it to destination
-       b. If successful, we're done (used_genre = True)
+    2. If label mapping not successful (no label, or label not mapped):
+       - Fall back to genre mapping if genre is available
     
     Returns:
         Tuple of (destination_dir, used_label, used_genre, detected_genre, detected_label)
@@ -442,42 +478,48 @@ def determine_destination(
     """
     used_label = False
     used_genre = False
-    detected_genre_for_log = genre  # Pass through the genre we received
-    detected_label_for_log = label  # Pass through the label we received
+    detected_genre_for_log = genre
+    detected_label_for_log = label
     dest_dir = None
 
-    # Priority 1: Label-based mapping (if label_to_dest is configured)
-    if label_to_dest:
-        # Try to map the label we received (from metadata or online)
-        if label is not None:
-            detected_label_for_log = label
-            dest_dir = find_label_destination(label, label_to_dest)
-            if dest_dir is not None:
-                used_label = True
+    # Priority 1: Label-based mapping (if label_to_dest is configured and we have a label)
+    if label_to_dest and label is not None:
+        detected_label_for_log = label
+        dest_dir = find_label_destination(label, label_to_dest)
+        if dest_dir is not None:
+            used_label = True
 
-    # If we have a destination from label mapping, we are done.
-    if dest_dir is not None:
-        return dest_dir, used_label, used_genre, detected_genre_for_log, detected_label_for_log
-
-    # Priority 2: Genre-based mapping (if we didn't get a destination from label mapping)
-    # We only try genre mapping if label_to_dest is not configured OR if we didn't have any label (so label mapping couldn't succeed)
-    if dest_dir is None and (not label_to_dest or label is None):
-        # Try to map the genre we received (from metadata or online)
-        if genre is not None:
-            detected_genre_for_log = genre
-            dest_dir = find_genre_destination(genre, genre_to_dest)
-            if dest_dir is not None:
-                used_genre = True
+    # Priority 2: Genre-based mapping (fallback if label mapping failed or no label)
+    if dest_dir is None and genre is not None:
+        detected_genre_for_log = genre
+        dest_dir = find_genre_destination(genre, genre_to_dest)
+        if dest_dir is not None:
+            used_genre = True
 
     return dest_dir, used_label, used_genre, detected_genre_for_log, detected_label_for_log
 
 
 def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str], genre: Optional[str]) -> str:
-    """Determine the reason for failure to find a destination."""
-    if label_to_dest and label is not None:
+    """
+    Determine the reason for failure to find a destination.
+    
+    Logic mirrors determine_destination priority:
+    1. If we have a label and label_map configured, and it wasn't mapped -> label_not_mapped
+    2. If we have a label but no label_map configured -> label_not_mapped (can't use it)
+    3. If we have no label but label_map exists -> label_missing
+    4. If we have no label and no genre -> lookup_failed
+    5. If we have genre but it's not mapped -> genre_not_mapped
+    """
+    has_label = label is not None and label_to_dest
+    
+    if has_label:
         return "label_not_mapped"
-    elif label_to_dest and label is None:
-        return "label_missing" 
+    elif label is not None and not label_to_dest:
+        return "label_not_mapped"
+    elif label is None and label_to_dest:
+        return "label_missing"
+    elif label is None and genre is None:
+        return "lookup_failed"
     elif genre is not None:
         return "genre_not_mapped"
     else:
@@ -575,7 +617,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
         # Determine destination
         genre_to_dest = config.get('genre_map', {})
         dest_dir, used_label, used_genre, detected_genre, detected_label = determine_destination(
-            artist, title, final_label, final_genre, label_to_dest, genre_to_dest
+            final_label, final_genre, label_to_dest, genre_to_dest
         )
         
         result['destination'] = str(dest_dir) if dest_dir else None

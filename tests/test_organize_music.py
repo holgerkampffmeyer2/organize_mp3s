@@ -272,7 +272,7 @@ class TestDetermineDestination(unittest.TestCase):
         label_to_dest = {"Test Label": "/path/to/label/dest"}
         genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
         dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
-            "Artist", "Title", "Test Label", "Test Genre", label_to_dest, genre_to_dest
+            "Test Label", "Test Genre", label_to_dest, genre_to_dest
         )
         self.assertEqual(dest_dir, "/path/to/label/dest")
         self.assertTrue(used_label)
@@ -285,7 +285,7 @@ class TestDetermineDestination(unittest.TestCase):
         label_to_dest = {}  # No label mapping configured
         genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
         dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
-            "Artist", "Title", None, "Test Genre", label_to_dest, genre_to_dest
+            None, "Test Genre", label_to_dest, genre_to_dest
         )
         self.assertEqual(dest_dir, "/path/to/genre/dest")
         self.assertFalse(used_label)
@@ -293,17 +293,17 @@ class TestDetermineDestination(unittest.TestCase):
         self.assertEqual(detected_genre, "Test Genre")
         self.assertIsNone(detected_label)
 
-    def test_label_mapping_exhausted_no_genre_mapping(self):
-        """Test when label mapping is exhausted and genre mapping is not attempted (because label mapping is configured)."""
+    def test_label_mapping_exhausted_genre_fallback(self):
+        """Test when label mapping is exhausted, genre is used as fallback."""
         label_to_dest = {"Other Label": "/some/other/dest"}  # "Test Label" is NOT in the mapping
         genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
         dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
-            "Artist", "Title", "Test Label", "Test Genre", label_to_dest, genre_to_dest
+            "Test Label", "Test Genre", label_to_dest, genre_to_dest
         )
-        # Since label mapping is configured and we have a label, we don't try genre mapping
-        self.assertIsNone(dest_dir)
+        # Since label is not mapped, genre is used as fallback
+        self.assertEqual(dest_dir, "/path/to/genre/dest")
         self.assertFalse(used_label)
-        self.assertFalse(used_genre)
+        self.assertTrue(used_genre)
         self.assertEqual(detected_genre, "Test Genre")
         self.assertEqual(detected_label, "Test Label")
 
@@ -312,7 +312,7 @@ class TestDetermineDestination(unittest.TestCase):
         label_to_dest = {}  # No label mapping configured
         genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
         dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
-            "Artist", "Title", None, "Test Genre", label_to_dest, genre_to_dest
+            None, "Test Genre", label_to_dest, genre_to_dest
         )
         self.assertEqual(dest_dir, "/path/to/genre/dest")
         self.assertFalse(used_label)
@@ -325,7 +325,7 @@ class TestDetermineDestination(unittest.TestCase):
         label_to_dest = {}
         genre_to_dest = {}
         dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
-            "Artist", "Title", None, None, label_to_dest, genre_to_dest
+            None, None, label_to_dest, genre_to_dest
         )
         self.assertIsNone(dest_dir)
         self.assertFalse(used_label)
