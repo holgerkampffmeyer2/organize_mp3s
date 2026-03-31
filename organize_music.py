@@ -522,8 +522,7 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
         return "lookup_failed"
     elif genre is not None:
         return "genre_not_mapped"
-    else:
-        return "lookup_failed"
+    return "lookup_failed"
 
 
 def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:

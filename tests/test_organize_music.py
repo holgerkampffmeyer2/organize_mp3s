@@ -263,6 +263,61 @@ class TestFindGenreDestination(unittest.TestCase):
         result = organize_music.find_genre_destination("Test Genre", genre_to_dest)
         self.assertIsNone(result)
 
+    def test_genre_subgenre_hierarchy_electro_house(self):
+        """Test that Electro House maps to House via parent genre."""
+        genre_to_dest = {"House": "/path/to/house"}
+        result = organize_music.find_genre_destination("Electro House", genre_to_dest)
+        self.assertEqual(result, "/path/to/house")
+
+    def test_genre_subgenre_hierarchy_progressive_house(self):
+        """Test that Progressive House maps to House via parent genre."""
+        genre_to_dest = {"House": "/path/to/house"}
+        result = organize_music.find_genre_destination("Progressive House", genre_to_dest)
+        self.assertEqual(result, "/path/to/house")
+
+    def test_genre_subgenre_hierarchy_techno(self):
+        """Test that Deep Techno maps to Techno via parent genre."""
+        genre_to_dest = {"Techno": "/path/to/techno"}
+        result = organize_music.find_genre_destination("Deep Techno", genre_to_dest)
+        self.assertEqual(result, "/path/to/techno")
+
+
+class TestExtractParentGenre(unittest.TestCase):
+    """Tests for _extract_parent_genre function."""
+
+    def test_electro_house(self):
+        self.assertEqual(organize_music._extract_parent_genre("Electro House"), "house")
+
+    def test_progressive_house(self):
+        self.assertEqual(organize_music._extract_parent_genre("Progressive House"), "house")
+
+    def test_techno(self):
+        self.assertEqual(organize_music._extract_parent_genre("Deep Techno"), "techno")
+
+    def test_drum_n_bass(self):
+        self.assertEqual(organize_music._extract_parent_genre("Drum and Bass"), "drum n bass")
+
+    def test_trance(self):
+        self.assertEqual(organize_music._extract_parent_genre("Progressive Trance"), "trance")
+
+    def test_edm(self):
+        self.assertEqual(organize_music._extract_parent_genre("EDM"), "edm")
+
+    def test_dance(self):
+        self.assertEqual(organize_music._extract_parent_genre("Dance"), "dance")
+
+    def test_electronic(self):
+        self.assertEqual(organize_music._extract_parent_genre("Electronic"), "electronic")
+
+    def test_no_match(self):
+        self.assertIsNone(organize_music._extract_parent_genre("Jazz"))
+
+    def test_empty_string(self):
+        self.assertIsNone(organize_music._extract_parent_genre(""))
+
+    def test_none(self):
+        self.assertIsNone(organize_music._extract_parent_genre(None))
+
 
 class TestDetermineDestination(unittest.TestCase):
     """Tests for determine_destination function."""
