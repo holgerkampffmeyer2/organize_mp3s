@@ -1,4 +1,3 @@
-# Trigger workflow run
 name: Test
 
 on:
