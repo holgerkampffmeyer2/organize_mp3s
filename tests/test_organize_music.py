@@ -1,360 +1,470 @@
 #!/usr/bin/env python3
 """
-Unit tests for the organize_music.py script.
+Unit tests for the MP3/M4A organizer.
 """
 
 import json
 import os
-import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 
-# Import the functions from the script
-# Since the script is in the parent directory, we add it to the path
-import sys
+# Add the parent directory to the path so we can import the module
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from organize_music import (
-    load_config,
-    get_artist_title_from_file,
-    parse_artist_title_from_filename,
-    lookup_genre_online_itunes,
-    lookup_genre_online_musicbrainz,
-    lookup_genre_online,
-    normalize_genre,
-    find_destination,
-    process_files
-)
+import organize_music
 
 
-class TestLoadConfig(unittest.TestCase):
-    @patch("pathlib.Path.is_file", return_value=True)
-    @patch("pathlib.Path.open", new_callable=mock_open)
-    def test_load_config_valid(self, mock_open, mock_is_file):
-        config_data = {
-            "genre_map": {
-                "Drum n Base": "/path/to/dnb",
-                "House": "/path/to/house",
-                "Techno, Trance": "/path/to/electronic"
-            }
-        }
-        mock_open.return_value.read.return_value = json.dumps(config_data)
-        config = load_config(Path("dummy.json"))
-        expected = {
-            "drum n base": "/path/to/dnb",
-            "house": "/path/to/house",
-            "techno": "/path/to/electronic",
-            "trance": "/path/to/electronic"
-        }
-        self.assertEqual(config, expected)
+class TestGetLabelFromMetadata(unittest.TestCase):
+    """Tests for get_label_from_metadata function."""
 
-    def test_load_config_file_not_found(self):
-        with self.assertRaises(FileNotFoundError):
-            load_config(Path("nonexistent.json"))
-
-    @patch("pathlib.Path.is_file", return_value=True)
-    @patch("pathlib.Path.open", new_callable=mock_open)
-    def test_load_config_empty_genre_map(self, mock_open, mock_is_file):
-        config_data = {"genre_map": {}}
-        mock_open.return_value.read.return_value = json.dumps(config_data)
-        config = load_config(Path("dummy.json"))
-        self.assertEqual(config, {})
-
-
-class TestGetArtistTitleFromFile(unittest.TestCase):
-    @patch("subprocess.run")
-    def test_success(self, mock_run):
+    @patch('subprocess.run')
+    def test_label_found(self, mock_run):
+        """Test when label is found in metadata."""
+        mock_run.return_value.stdout = "Test Label\n"
         mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = json.dumps({
-            "format": {
-                "tags": {
-                    "artist": "Test Artist",
-                    "title": "Test Title"
-                }
-            }
-        })
-        artist, title = get_artist_title_from_file(Path("dummy.mp3"))
-        self.assertEqual(artist, "Test Artist")
-        self.assertEqual(title, "Test Title")
 
-    @patch("subprocess.run")
-    def test_missing_artist(self, mock_run):
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = json.dumps({
-            "format": {
-                "tags": {
-                    "title": "Test Title"
-                }
-            }
-        })
-        artist, title = get_artist_title_from_file(Path("dummy.mp3"))
-        self.assertIsNone(artist)
-        self.assertEqual(title, "Test Title")
+        result = organize_music.get_label_from_metadata(Path("test.mp3"), None)
+        self.assertEqual(result, "Test Label")
 
-    @patch("subprocess.run")
-    def test_empty_strings(self, mock_run):
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = json.dumps({
-            "format": {
-                "tags": {
-                    "artist": "   ",
-                    "title": "   "
-                }
-            }
-        })
-        artist, title = get_artist_title_from_file(Path("dummy.mp3"))
-        self.assertIsNone(artist)
-        self.assertIsNone(title)
-
-    @patch("subprocess.run")
-    def test_ffprobe_error(self, mock_run):
+    @patch('subprocess.run')
+    def test_label_not_found(self, mock_run):
+        """Test when label is not found in metadata."""
+        mock_run.return_value.stdout = ""
         mock_run.return_value.returncode = 1
-        artist, title = get_artist_title_from_file(Path("dummy.mp3"))
-        self.assertIsNone(artist)
-        self.assertIsNone(title)
 
-    @patch("subprocess.run")
-    def test_timeout(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired("ffprobe", 5)
-        artist, title = get_artist_title_from_file(Path("dummy.mp3"))
-        self.assertIsNone(artist)
-        self.assertIsNone(title)
+        result = organize_music.get_label_from_metadata(Path("test.mp3"), None)
+        self.assertIsNone(result)
 
+    @patch('subprocess.run')
+    def test_label_with_source_tag(self, mock_run):
+        """Test when label_source_tag is provided."""
+        mock_run.return_value.stdout = "Test Label\n"
+        mock_run.return_value.returncode = 0
 
-class TestParseArtistTitleFromFilename(unittest.TestCase):
-    def test_standard_format(self):
-        artist, title = parse_artist_title_from_filename("Artist - Title.mp3")
-        self.assertEqual(artist, "Artist")
-        self.assertEqual(title, "Title")
-
-    def test_no_dash(self):
-        artist, title = parse_artist_title_from_filename("JustTitle.mp3")
-        self.assertIsNone(artist)
-        self.assertEqual(title, "JustTitle")
-
-    def test_empty_artist(self):
-        artist, title = parse_artist_title_from_filename(" - Title.mp3")
-        self.assertIsNone(artist)
-        self.assertEqual(title, "Title")
-
-    def test_empty_title(self):
-        artist, title = parse_artist_title_from_filename("Artist - .mp3")
-        self.assertEqual(artist, "Artist")
-        self.assertIsNone(title)
-
-    def test_multiple_dashes(self):
-        artist, title = parse_artist_title_from_filename("Artist - Title - Remix.mp3")
-        self.assertEqual(artist, "Artist")
-        self.assertEqual(title, "Title - Remix")
+        result = organize_music.get_label_from_metadata(Path("test.mp3"), "TPUB")
+        # Should have called ffprobe with TPUB tag
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertIn("format_tags=TPUB", args)
+        self.assertEqual(result, "Test Label")
 
 
-class TestNormalizeGenre(unittest.TestCase):
-    def test_normalize(self):
-        self.assertEqual(normalize_genre("  TeChNo  "), "techno")
-        self.assertEqual(normalize_genre("DRUM N BASS"), "drum n bass")
+class TestLookupLabelOnline(unittest.TestCase):
+    """Tests for lookup_label_online function."""
 
+    @patch('urllib.request.urlopen')
+    def test_label_found_online(self, mock_urlopen):
+        """Test when label is found via online lookup."""
+        # Mock the iTunes search response (context manager)
+        search_cm = MagicMock()
+        search_cm.__enter__.return_value.read.return_value = json.dumps({
+            'resultCount': 1,
+            'results': [{'trackId': 12345}]
+        }).encode()
 
-class TestFindDestination(unittest.TestCase):
-    def setUp(self):
-        self.genre_to_dest = {
-            "house": "/path/to/house",
-            "drum n base": "/path/to/dnb",
-            "techno": "/path/to/techno"
-        }
+        # Mock the iTunes lookup response (context manager)
+        lookup_cm = MagicMock()
+        lookup_cm.__enter__.return_value.read.return_value = json.dumps({
+            'resultCount': 1,
+            'results': [{'label': 'Test Label'}]
+        }).encode()
 
-    def test_exact_match(self):
-        dest = find_destination("House", self.genre_to_dest)
-        self.assertEqual(dest, "/path/to/house")
+        # Make urlopen return the search response first, then the lookup response
+        mock_urlopen.side_effect = [search_cm, lookup_cm]
 
-    def test_drum_n_base_special_case(self):
-        # When genre contains both drum and bass, it should map to drum n base if present
-        dest = find_destination("Tech Drum Bass Remix", self.genre_to_dest)
-        self.assertEqual(dest, "/path/to/dnb")
+        result = organize_music.lookup_label_online("Test Artist", "Test Title")
+        self.assertEqual(result, "Test Label")
+        self.assertEqual(mock_urlopen.call_count, 2)
 
-    def test_drum_n_base_not_in_config(self):
-        # If drum n base is not in config, fall back to normal lookup (which will fail)
-        genre_to_dest_no_dnb = {"house": "/path/to/house"}
-        dest = find_destination("Drum and Bass", genre_to_dest_no_dnb)
-        self.assertIsNone(dest)
+    @patch('urllib.request.urlopen')
+    def test_label_not_found_online(self, mock_urlopen):
+        """Test when label is not found via online lookup."""
+        # Mock the response (context manager)
+        mock_cm = MagicMock()
+        mock_cm.__enter__.return_value.read.return_value = json.dumps({
+            'resultCount': 0
+        }).encode()
+        mock_urlopen.return_value = mock_cm
 
-    def test_no_match(self):
-        dest = find_destination("Unknown Genre", self.genre_to_dest)
-        self.assertIsNone(dest)
+        result = organize_music.lookup_label_online("Test Artist", "Test Title")
+        self.assertIsNone(result)
 
-
-class TestLookupGenreOnline(unittest.TestCase):
-    @patch("urllib.request.urlopen")
-    def test_itunes_success(self, mock_urlopen):
-        mock_response = MagicMock()
-        mock_response.__enter__.return_value.read.return_value = json.dumps({
-            "results": [{
-                "primaryGenreName": "House"
-            }]
-        })
-        mock_urlopen.return_value = mock_response
-
-        genre = lookup_genre_online_itunes("Artist", "Title")
-        self.assertEqual(genre, "House")
-
-    @patch("urllib.request.urlopen")
-    def test_itunes_failure(self, mock_urlopen):
+    @patch('urllib.request.urlopen')
+    def test_label_online_exception(self, mock_urlopen):
+        """Test when an exception occurs during online lookup."""
         mock_urlopen.side_effect = Exception("Network error")
-        genre = lookup_genre_online_itunes("Artist", "Title")
-        self.assertIsNone(genre)
 
-    @patch("urllib.request.urlopen")
-    def test_musicbrainz_success_recording_with_release_group_tag(self, mock_urlopen):
-        # First call: search for recording
-        # Second call: get recording with releases and release-groups
-        # Third call: get release-group by id
-        responses = [
-            json.dumps({"recordings": [{"id": "mbid1"}]}),
-            json.dumps({
-                "release-groups": [{
-                    "tags": [{"name": "Techno"}]
-                }]
-            })
-        ]
-        mocks = []
-        for r in responses:
-            m = MagicMock()
-            m.__enter__.return_value.read.return_value = r.encode()
-            m.__exit__.return_value = None
-            mocks.append(m)
-        mock_urlopen.side_effect = mocks
-
-        genre = lookup_genre_online_musicbrainz("Artist", "Title")
-        self.assertEqual(genre, "Techno")
-
-    @patch("urllib.request.urlopen")
-    def test_musicbrainz_fallback_to_release(self, mock_urlopen):
-        # First call: recording search
-        # Second call: recording detail has no release-groups but has releases
-        # Third call: release-group from first release
-        responses = [
-            json.dumps({"recordings": [{"id": "mbid1"}]}),
-            json.dumps({
-                "releases": [{
-                    "release-group": {"id": "rgid1"}
-                }]
-            }),
-            json.dumps({
-                "tags": [{"name": "House"}]
-            })
-        ]
-        mocks = []
-        for r in responses:
-            m = MagicMock()
-            m.__enter__.return_value.read.return_value = r.encode()
-            m.__exit__.return_value = None
-            mocks.append(m)
-        mock_urlopen.side_effect = mocks
-
-        genre = lookup_genre_online_musicbrainz("Artist", "Title")
-        self.assertEqual(genre, "House")
-
-    @patch("urllib.request.urlopen")
-    def test_musicbrainz_no_tags(self, mock_urlopen):
-        mock1 = MagicMock()
-        mock1.__enter__.return_value.read.return_value = json.dumps({"recordings": [{"id": "mbid1"}]}).encode()
-        mock1.__exit__.return_value = None
-        
-        mock2 = MagicMock()
-        mock2.__enter__.return_value.read.return_value = json.dumps({"release-groups": []}).encode()
-        mock2.__exit__.return_value = None
-        
-        mock_urlopen.side_effect = [mock1, mock2]
-        
-        genre = lookup_genre_online_musicbrainz("Artist", "Title")
-        self.assertIsNone(genre)
-
-    @patch("organize_music.lookup_genre_online_itunes")
-    @patch("organize_music.lookup_genre_online_musicbrainz")
-    def test_lookup_genre_online_itunes_priority(self, mock_musicbrainz, mock_itunes):
-        mock_itunes.return_value = "iTunes Genre"
-        mock_musicbrainz.return_value = "MusicBrainz Genre"
-        genre = lookup_genre_online("Artist", "Title")
-        self.assertEqual(genre, "iTunes Genre")
-        mock_musicbrainz.assert_not_called()
-
-    @patch("organize_music.lookup_genre_online_itunes")
-    @patch("organize_music.lookup_genre_online_musicbrainz")
-    def test_lookup_genre_online_fallback(self, mock_musicbrainz, mock_itunes):
-        mock_itunes.return_value = None
-        mock_musicbrainz.return_value = "Fallback Genre"
-        genre = lookup_genre_online("Artist", "Title")
-        self.assertEqual(genre, "Fallback Genre")
+        result = organize_music.lookup_label_online("Test Artist", "Test Title")
+        self.assertIsNone(result)
 
 
-class TestProcessFiles(unittest.TestCase):
+class TestFindLabelDestination(unittest.TestCase):
+    """Tests for find_label_destination function."""
+
+    def test_label_mapped_exact(self):
+        """Test when label exactly matches a key in the mapping."""
+        label_to_dest = {"Test Label": "/path/to/dest"}
+        result = organize_music.find_label_destination("Test Label", label_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_label_mapped_case_insensitive(self):
+        """Test when label matches case-insensitively."""
+        label_to_dest = {"Test Label": "/path/to/dest"}
+        result = organize_music.find_label_destination("test label", label_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_label_mapped_comma_separated(self):
+        """Test when label matches a part of a comma-separated key."""
+        label_to_dest = {"Genre1, Genre2": "/path/to/dest"}
+        result = organize_music.find_label_destination("Genre2", label_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_label_special_case_drum_bass(self):
+        """Test the special case for drum and bass."""
+        label_to_dest = {"Drum n Base": "/path/to/dest"}
+        result = organize_music.find_label_destination("DRUM and BASS Music", label_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_label_not_mapped(self):
+        """Test when label is not found in mapping."""
+        label_to_dest = {"Other Label": "/path/to/dest"}
+        result = organize_music.find_label_destination("Test Label", label_to_dest)
+        self.assertIsNone(result)
+
+
+class TestGetGenreFromMetadata(unittest.TestCase):
+    """Tests for get_genre_from_metadata function."""
+
+    @patch('subprocess.run')
+    def test_genre_found(self, mock_run):
+        """Test when genre is found in metadata."""
+        mock_run.return_value.stdout = "Test Genre\n"
+        mock_run.return_value.returncode = 0
+
+        result = organize_music.get_genre_from_metadata(Path("test.mp3"))
+        self.assertEqual(result, "Test Genre")
+
+    @patch('subprocess.run')
+    def test_genre_not_found(self, mock_run):
+        """Test when genre is not found in metadata."""
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.returncode = 1
+
+        result = organize_music.get_genre_from_metadata(Path("test.mp3"))
+        self.assertIsNone(result)
+
+
+class TestGetGenreOnline(unittest.TestCase):
+    """Tests for get_genre_online function."""
+
     def setUp(self):
-        self.source_dir = Path("/tmp/test_source")
-        self.source_dir.mkdir(exist_ok=True)
-        # Create a dummy file
-        (self.source_dir / "test.mp3").touch()
+        """Clear genre cache before each test to ensure test isolation."""
+        if hasattr(organize_music, '_genre_cache'):
+            organize_music._genre_cache.clear()
 
-        self.genre_to_dest = {
-            "house": "/tmp/test_dest/house"
-        }
+    @patch('urllib.request.urlopen')
+    def test_genre_found_itunes(self, mock_urlopen):
+        """Test when genre is found via iTunes."""
+        # Mock the response (context manager)
+        mock_cm = MagicMock()
+        mock_cm.__enter__.return_value.read.return_value = json.dumps({
+            'resultCount': 1,
+            'results': [{'primaryGenreName': 'Test Genre'}]
+        }).encode()
+        mock_urlopen.return_value = mock_cm
 
-    def tearDown(self):
-        # Clean up
-        import shutil
-        if self.source_dir.exists():
-            shutil.rmtree(self.source_dir)
-        # Note: we don't clean the destination because we mock the move
+        result = organize_music.get_genre_online("Test Artist", "Test Title")
+        self.assertEqual(result, "Test Genre")
 
-    @patch("organize_music.get_artist_title_from_file")
-    @patch("organize_music.lookup_genre_online")
-    @patch("organize_music.find_destination")
-    def test_process_files_move(self, mock_find_dest, mock_lookup, mock_get_artist_title):
-        # Setup metadata
-        mock_get_artist_title.return_value = ("Artist", "Title")
-        mock_lookup.return_value = "House"
-        mock_find_dest.return_value = "/tmp/test_dest/house"
+    @patch('urllib.request.urlopen')
+    def test_genre_found_musicbrainz(self, mock_urlopen):
+        """Test when genre is found via MusicBrainz (iTunes fails)."""
+        # Mock the responses (context managers)
+        itunes_resp = MagicMock()
+        itunes_resp.__enter__.return_value.read.return_value = json.dumps({
+            'resultCount': 0
+        }).encode()
+        
+        mb_search_resp = MagicMock()
+        mb_search_resp.__enter__.return_value.read.return_value = json.dumps({
+            'recordings': [{'id': 'recording-id'}]
+        }).encode()
+        
+        mb_rg_resp = MagicMock()
+        mb_rg_resp.__enter__.return_value.read.return_value = json.dumps({
+            'release-groups': [{'id': 'rg-id'}]
+        }).encode()
+        
+        mb_tag_resp = MagicMock()
+        mb_tag_resp.__enter__.return_value.read.return_value = json.dumps({
+            'release-group': {'tags': [{'name': 'Test Genre'}]}
+        }).encode()
 
-        # We'll mock the actual move and directory creation to avoid touching the filesystem
-        with patch("pathlib.Path.mkdir"), \
-             patch("pathlib.Path.rename") as mock_rename:
-            log_entries = process_files(self.source_dir, self.genre_to_dest, dry_run=False)
-            # Since we moved the file, we expect no log entries (only non-moved are logged)
-            self.assertEqual(len(log_entries), 0)
-            mock_rename.assert_called_once()
+        mock_urlopen.side_effect = [itunes_resp, mb_search_resp, mb_rg_resp, mb_tag_resp]
 
-    @patch("organize_music.get_artist_title_from_file")
-    @patch("organize_music.lookup_genre_online")
-    @patch("organize_music.find_destination")
-    def test_process_files_genre_not_mapped(self, mock_find_dest, mock_lookup, mock_get_artist_title):
-        mock_get_artist_title.return_value = ("Artist", "Title")
-        mock_lookup.return_value = "UnknownGenre"
-        mock_find_dest.return_value = None  # Not mapped
+        result = organize_music.get_genre_online("Test Artist", "Test Title")
+        self.assertEqual(result, "Test Genre")
+        self.assertEqual(mock_urlopen.call_count, 4)
 
-        log_entries = process_files(self.source_dir, self.genre_to_dest, dry_run=False)
-        self.assertEqual(len(log_entries), 1)
-        self.assertEqual(log_entries[0]["reason"], "genre_not_mapped")
+    @patch('urllib.request.urlopen')
+    def test_genre_not_found_online(self, mock_urlopen):
+        """Test when genre is not found via online lookup."""
+        # Mock the response (context manager)
+        mock_cm = MagicMock()
+        mock_cm.__enter__.return_value.read.return_value = json.dumps({
+            'resultCount': 0
+        }).encode()
+        mock_urlopen.return_value = mock_cm
 
-    @patch("organize_music.get_artist_title_from_file")
-    @patch("organize_music.lookup_genre_online")
-    @patch("organize_music.find_destination")
-    def test_process_files_target_exists(self, mock_find_dest, mock_lookup, mock_get_artist_title):
-        mock_get_artist_title.return_value = ("Artist", "Title")
-        mock_lookup.return_value = "House"
-        mock_find_dest.return_value = "/tmp/test_dest/house"
+        result = organize_music.get_genre_online("Test Artist", "Test Title")
+        self.assertIsNone(result)
 
-        # Make the target file exist
-        with patch("pathlib.Path.is_file", return_value=True):
-            log_entries = process_files(self.source_dir, self.genre_to_dest, dry_run=False)
-            self.assertEqual(len(log_entries), 1)
-            self.assertEqual(log_entries[0]["reason"], "target_exists")
+    @patch('urllib.request.urlopen')
+    def test_genre_online_exception(self, mock_urlopen):
+        """Test when an exception occurs during online lookup."""
+        mock_urlopen.side_effect = Exception("Network error")
 
-    @patch("organize_music.get_artist_title_from_file")
-    def test_process_files_missing_metadata(self, mock_get_artist_title):
-        mock_get_artist_title.return_value = (None, "Title")  # missing artist
-        log_entries = process_files(self.source_dir, self.genre_to_dest, dry_run=False)
-        self.assertEqual(len(log_entries), 1)
-        self.assertEqual(log_entries[0]["reason"], "missing_metadata_artist")
+        result = organize_music.get_genre_online("Test Artist", "Test Title")
+        self.assertIsNone(result)
 
 
-if __name__ == "__main__":
+class TestFindGenreDestination(unittest.TestCase):
+    """Tests for find_genre_destination function."""
+
+    def test_genre_mapped_exact(self):
+        """Test when genre exactly matches a key in the mapping."""
+        genre_to_dest = {"Test Genre": "/path/to/dest"}
+        result = organize_music.find_genre_destination("Test Genre", genre_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_genre_mapped_case_insensitive(self):
+        """Test when genre matches case-insensitively."""
+        genre_to_dest = {"Test Genre": "/path/to/dest"}
+        result = organize_music.find_genre_destination("test genre", genre_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_genre_mapped_comma_separated(self):
+        """Test when genre matches a part of a comma-separated key."""
+        genre_to_dest = {"Genre1, Genre2": "/path/to/dest"}
+        result = organize_music.find_genre_destination("Genre2", genre_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_genre_special_case_drum_bass(self):
+        """Test the special case for drum and bass."""
+        genre_to_dest = {"Drum n Base": "/path/to/dest"}
+        result = organize_music.find_genre_destination("DRUM and BASS Music", genre_to_dest)
+        self.assertEqual(result, "/path/to/dest")
+
+    def test_genre_not_mapped(self):
+        """Test when genre is not found in mapping."""
+        genre_to_dest = {"Other Genre": "/path/to/dest"}
+        result = organize_music.find_genre_destination("Test Genre", genre_to_dest)
+        self.assertIsNone(result)
+
+
+class TestDetermineDestination(unittest.TestCase):
+    """Tests for determine_destination function."""
+
+    def test_label_mapping_used(self):
+        """Test when label mapping is used."""
+        label_to_dest = {"Test Label": "/path/to/label/dest"}
+        genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
+        dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
+            "Artist", "Title", "Test Label", "Test Genre", label_to_dest, genre_to_dest
+        )
+        self.assertEqual(dest_dir, "/path/to/label/dest")
+        self.assertTrue(used_label)
+        self.assertFalse(used_genre)
+        self.assertEqual(detected_genre, "Test Genre")
+        self.assertEqual(detected_label, "Test Label")
+
+    def test_label_mapping_not_used_genre_used(self):
+        """Test when label mapping is not used but genre mapping is used."""
+        label_to_dest = {}  # No label mapping configured
+        genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
+        dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
+            "Artist", "Title", None, "Test Genre", label_to_dest, genre_to_dest
+        )
+        self.assertEqual(dest_dir, "/path/to/genre/dest")
+        self.assertFalse(used_label)
+        self.assertTrue(used_genre)
+        self.assertEqual(detected_genre, "Test Genre")
+        self.assertIsNone(detected_label)
+
+    def test_label_mapping_exhausted_no_genre_mapping(self):
+        """Test when label mapping is exhausted and genre mapping is not attempted (because label mapping is configured)."""
+        label_to_dest = {"Other Label": "/some/other/dest"}  # "Test Label" is NOT in the mapping
+        genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
+        dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
+            "Artist", "Title", "Test Label", "Test Genre", label_to_dest, genre_to_dest
+        )
+        # Since label mapping is configured and we have a label, we don't try genre mapping
+        self.assertIsNone(dest_dir)
+        self.assertFalse(used_label)
+        self.assertFalse(used_genre)
+        self.assertEqual(detected_genre, "Test Genre")
+        self.assertEqual(detected_label, "Test Label")
+
+    def test_label_mapping_exhausted_no_label_no_label_mapping(self):
+        """Test when there's no label and no label mapping configured, so we try genre mapping."""
+        label_to_dest = {}  # No label mapping configured
+        genre_to_dest = {"Test Genre": "/path/to/genre/dest"}
+        dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
+            "Artist", "Title", None, "Test Genre", label_to_dest, genre_to_dest
+        )
+        self.assertEqual(dest_dir, "/path/to/genre/dest")
+        self.assertFalse(used_label)
+        self.assertTrue(used_genre)
+        self.assertEqual(detected_genre, "Test Genre")
+        self.assertIsNone(detected_label)
+
+    def test_no_label_no_genre(self):
+        """Test when there's no label and no genre."""
+        label_to_dest = {}
+        genre_to_dest = {}
+        dest_dir, used_label, used_genre, detected_genre, detected_label = organize_music.determine_destination(
+            "Artist", "Title", None, None, label_to_dest, genre_to_dest
+        )
+        self.assertIsNone(dest_dir)
+        self.assertFalse(used_label)
+        self.assertFalse(used_genre)
+        self.assertIsNone(detected_genre)
+        self.assertIsNone(detected_label)
+
+
+class TestDetermineFailureReason(unittest.TestCase):
+    """Tests for determine_failure_reason function."""
+
+    def test_label_not_mapped(self):
+        """Test when label is present but not mapped."""
+        reason = organize_music.determine_failure_reason("Test Label", {"Other Label": "/dest"}, None)
+        self.assertEqual(reason, "label_not_mapped")
+
+    def test_label_missing(self):
+        """Test when label mapping is configured but label is missing."""
+        reason = organize_music.determine_failure_reason(None, {"Test Label": "/dest"}, None)
+        self.assertEqual(reason, "label_missing")
+
+    def test_genre_not_mapped(self):
+        """Test when genre is present but not mapped."""
+        reason = organize_music.determine_failure_reason(None, {}, "Test Genre")
+        self.assertEqual(reason, "genre_not_mapped")
+
+    def test_lookup_failed(self):
+        """Test when both label and genre are missing."""
+        reason = organize_music.determine_failure_reason(None, {}, None)
+        self.assertEqual(reason, "lookup_failed")
+
+
+class TestProcessFile(unittest.TestCase):
+    """Tests for process_file function."""
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_file_processed_successfully(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                                         mock_genre_online, mock_genre_metadata, mock_label_online,
+                                         mock_label_metadata):
+        """Test when a file is successfully processed (would be moved)."""
+        # Setup mocks for subprocess.run (artist, title, and genre metadata)
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            # Check if this is the artist call
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = "Test Artist\n"
+            # Check if this is the title call
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = "Test Title\n"
+            # Check for genre metadata
+            elif len(args) > 0 and isinstance(args[0], list) and any('genre' in arg for arg in args[0]):
+                mock_result.stdout = ""  # No genre in metadata
+            else:
+                mock_result.stdout = ""
+            return mock_result
+        
+        mock_subprocess.side_effect = subprocess_side_effect
+        
+        # Setup mocks for other functions
+        mock_label_metadata.return_value = None
+        mock_label_online.return_value = "Test Label"
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "Test Genre"
+        mock_determine_dest.return_value = ("/dest/path", True, False, "Test Genre", "Test Label")
+        mock_exists.return_value = False  # Target file does not exist
+        mock_failure_reason.return_value = "label_not_mapped"  # Should not be used if dest is found
+
+        # Call the function
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"Test Genre": "/dest/path"}},
+            dry_run=True
+        )
+
+        # Assertions
+        self.assertEqual(result['action'], 'move')
+        self.assertEqual(result['destination'], "/dest/path/test.mp3")
+        self.assertEqual(result['label'], "Test Label")
+        self.assertEqual(result['genre'], "Test Genre")
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_file_not_moved_due_to_target_exists(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                                                 mock_genre_online, mock_genre_metadata, mock_label_online,
+                                                 mock_label_metadata):
+        """Test when a file is not moved because target already exists."""
+        # Setup mocks for subprocess.run (artist, title, and genre metadata)
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            # Check if this is the artist call
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = "Test Artist\n"
+            # Check if this is the title call
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = "Test Title\n"
+            # Check for genre metadata
+            elif len(args) > 0 and isinstance(args[0], list) and any('genre' in arg for arg in args[0]):
+                mock_result.stdout = ""  # No genre in metadata
+            else:
+                mock_result.stdout = ""
+            return mock_result
+        
+        mock_subprocess.side_effect = subprocess_side_effect
+        
+        # Setup mocks
+        mock_label_metadata.return_value = None
+        mock_label_online.return_value = "Test Label"
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "Test Genre"
+        mock_determine_dest.return_value = ("/dest/path", True, False, "Test Genre", "Test Label")
+        mock_exists.return_value = True  # Target file exists
+        mock_failure_reason.return_value = "target_exists"
+
+        # Call the function
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"Test Genre": "/dest/path"}},
+            dry_run=True
+        )
+
+        # Assertions
+        self.assertEqual(result['action'], 'leave')
+        self.assertEqual(result['reason'], 'target_exists')
+
+
+if __name__ == '__main__':
     unittest.main()

@@ -1,6 +1,17 @@
 {
   "genre_map": {
-    "Drum n Base": "/mnt/c/Users/holge/Music/Mixx/Drum N Base",
-    "House": "/mnt/c/Users/holge/Music/Mixx/House 2026"
-  }
+    "Drum n Base": "DnB",
+    "House": "House",
+    "Deep Techno": "House",
+    "Techno": "House",
+    "Tech House": "House"
+  },
+  "label_map": {
+    "MixCult Records": "House",
+    "SHODAN RECORDS": "House",
+    "Warner Music Group": "House",
+    "Music is 4 Lovers": "House",
+    "Unchained Soul Records": "DnB"
+  },
+  "label_source_tag": "label"
 }

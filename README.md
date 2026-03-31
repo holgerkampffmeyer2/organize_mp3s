@@ -17,6 +17,7 @@ The agent handles:
 - File discovery and batch processing decisions
 - Metadata extraction from files
 - Online genre lookup: iTunes → MusicBrainz
+- Online label lookup: iTunes (when metadata missing)
 - Error recovery and retries
 - Verification of organization results
 
@@ -54,10 +55,11 @@ sudo apt install ffmpeg python3
 
 ## Technical Details
 
-- **Metadata Source**: Artist and title from file metadata (ffprobe)
+- **Metadata Source**: Artist and title from file metadata (ffprobe); Label from file metadata (ffprobe) or online lookup
 - **Genre Lookup**: iTunes Search API (primary), MusicBrainz API (fallback)
+- **Label Lookup**: iTunes Search API (when metadata missing, with track ID lookup)
 - **Timeouts**: 5 seconds for ffprobe, 10 seconds for HTTP requests
-- **Output**: Files moved to genre-specific folders as defined in config.json
+- **Output**: Files moved to genre-specific or label-specific folders as defined in config.json
 - **Logging**: JSON log of non-processed files (normal) or audit log (dry-run)
 
 ## Configuration
@@ -70,9 +72,20 @@ Create a `config.json` file in the same directory as the script:
     "Drum n Base": "/path/to/drum-n-base",
     "House": "/path/to/house",
     "Techno, Trance": "/path/to/electronic"
-  }
+  },
+  "label_map": {
+    "Ninja Tune": "/path/to/ninja-tune",
+    "Warp Records": "/path/to/warp",
+    "Planet Mu": "/path/to/planet-mu"
+  },
+  "label_source_tag": "label"  // Optional: specify which tag to use for label (e.g., 'TPUB')
 }
 ```
+
+- Add more genres or labels as needed.
+- The `label_map` works the same way as `genre_map` (keys can be comma-separated lists).
+- If `label_source_tag` is provided, the script will try to read that specific tag (and its uppercase variant) for the label.
+- If `label_source_tag` is not provided, the script checks common label-related tags: 'label', 'Label', 'TPUB', 'publisher'.
 
 ## File Structure
 
