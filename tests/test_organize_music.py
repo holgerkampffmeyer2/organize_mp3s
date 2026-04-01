@@ -1023,5 +1023,86 @@ class TestProcessFile(unittest.TestCase):
         self.assertEqual(result['reason'], 'target_exists')
 
 
+class TestFindFuzzyGenre(unittest.TestCase):
+    """Tests for fuzzy genre matching."""
+
+    def test_synonym_hip_hop(self):
+        """Test genre synonym matching for hip hop."""
+        genre_map = {"Hip-Hop/Rap": "House", "Electronic": "House"}
+        result = organize_music._find_fuzzy_genre("hip hop", genre_map)
+        self.assertEqual(result, "House")
+
+    def test_synonym_dnb(self):
+        """Test genre synonym matching for drum and bass."""
+        genre_map = {"Drum n Bass": "DnB"}
+        result = organize_music._find_fuzzy_genre("dnb", genre_map)
+        self.assertEqual(result, "DnB")
+
+    def test_synonym_liquid(self):
+        """Test genre synonym matching for liquid."""
+        genre_map = {"Drum n Bass": "DnB"}
+        result = organize_music._find_fuzzy_genre("liquid", genre_map)
+        self.assertEqual(result, "DnB")
+
+    def test_fuzzy_match_techno(self):
+        """Test fuzzy matching for similar genre names."""
+        genre_map = {"Techno": "House", "Tech House": "House"}
+        result = organize_music._find_fuzzy_genre("Techno ", genre_map)
+        self.assertEqual(result, "House")
+
+    def test_no_match_below_threshold(self):
+        """Test that low similarity genres don't match."""
+        genre_map = {"House": "House", "Techno": "House"}
+        result = organize_music._find_fuzzy_genre("Jazz", genre_map, threshold=0.75)
+        self.assertIsNone(result)
+
+    def test_empty_input(self):
+        """Test empty genre input."""
+        result = organize_music._find_fuzzy_genre("", {"House": "House"})
+        self.assertIsNone(result)
+
+    def test_empty_map(self):
+        """Test empty genre map."""
+        result = organize_music._find_fuzzy_genre("House", {})
+        self.assertIsNone(result)
+
+    def test_exact_match_preferred(self):
+        """Test that exact matches are preferred over fuzzy."""
+        genre_map = {"House": "House"}
+        result = organize_music._find_fuzzy_genre("House", genre_map)
+        self.assertEqual(result, "House")
+
+    def test_fuzzy_house_variant(self):
+        """Test fuzzy matching for 'progressive house'."""
+        genre_map = {"House": "House", "Progressive House": "House"}
+        result = organize_music._find_fuzzy_genre("prog house", genre_map)
+        self.assertEqual(result, "House")
+
+    def test_afro_house_synonym(self):
+        """Test afro house synonym."""
+        genre_map = {"House": "House"}
+        result = organize_music._find_fuzzy_genre("afro house", genre_map)
+        self.assertEqual(result, "House")
+
+
+class TestGenreDestinationWithFuzzy(unittest.TestCase):
+    """Test find_genre_destination with fuzzy matching enabled."""
+
+    def test_fuzzy_match_integration(self):
+        """Test that fuzzy matching works within find_genre_destination."""
+        genre_map = {"Hip-Hop/Rap": "House", "House": "House"}
+        
+        # Should find via fuzzy matching (synonym -> exact match)
+        result = organize_music.find_genre_destination("hip hop", genre_map)
+        self.assertEqual(result, "House")
+
+    def test_synonym_fallback_integration(self):
+        """Test that synonyms work within find_genre_destination."""
+        genre_map = {"Electronic": "House"}
+        
+        result = organize_music.find_genre_destination("edm", genre_map)
+        self.assertEqual(result, "House")
+
+
 if __name__ == '__main__':
     unittest.main()

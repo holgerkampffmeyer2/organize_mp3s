@@ -699,7 +699,111 @@ def find_genre_destination(genre: str, genre_to_dest: Dict[str, str]) -> Optiona
     # Subgenre hierarchy: extract parent genre and try again
     parent_genre = _extract_parent_genre(normalized_genre)
     if parent_genre and parent_genre != normalized_genre:
-        return find_genre_destination(parent_genre, genre_to_dest)
+        result = find_genre_destination(parent_genre, genre_to_dest)
+        if result:
+            return result
+    
+    # Fuzzy matching: try to find similar genre in config
+    fuzzy_result = _find_fuzzy_genre(genre, genre_to_dest)
+    if fuzzy_result:
+        return fuzzy_result
+    
+    return None
+
+
+GENRE_SYNONYMS = {
+    "hip hop": "Hip-Hop/Rap",
+    "hiphop": "Hip-Hop/Rap",
+    "hip-hop": "Hip-Hop/Rap",
+    "rap": "Hip-Hop/Rap",
+    "edm": "Electronic",
+    "electro": "Electronic",
+    "dnb": "Drum n Bass",
+    "drum & bass": "Drum n Bass",
+    "drum and bass": "Drum n Bass",
+    "drumnbass": "Drum n Bass",
+    "dnbf": "Drum n Bass",
+    "liquid": "Drum n Bass",
+    "neurofunk": "Drum n Bass",
+    "neuro": "Drum n Bass",
+    "jungle": "Drum n Bass",
+    "progressive house": "House",
+    "prog house": "House",
+    "electro house": "House",
+    "deep house": "House",
+    "tech house": "House",
+    "future house": "House",
+    "tropical house": "House",
+    "melodic house": "House",
+    "organic house": "House",
+    "disco house": "House",
+    "afro house": "House",
+    "funky house": "House",
+    "garage": "House",
+    "trance": "Trance",
+    "psytrance": "Trance",
+    "progressive trance": "Trance",
+    "techno": "Techno",
+    "hard techno": "Techno",
+    "minimal": "Techno",
+    "dark techno": "Techno",
+    "dubstep": "Dubstep",
+    "dub": "Dubstep",
+    "bass": "Dubstep",
+    "experimental": "Experimental",
+    "ambient": "Ambient",
+    "chill": "Ambient",
+    "downtempo": "Ambient",
+    "idm": "Electronic",
+    "electronica": "Electronic",
+}
+
+
+def _find_fuzzy_genre(genre: str, genre_to_dest: Dict[str, str], threshold: float = 0.8) -> Optional[str]:
+    """
+    Find genre in config using fuzzy matching.
+    
+    Uses Levenshtein distance ratio to find similar genres.
+    
+    Args:
+        genre: Genre string to match
+        genre_to_dest: Mapping of config genres to destinations
+        threshold: Minimum similarity score (0-1) for match
+        
+    Returns:
+        Destination string if match found, None otherwise
+    """
+    if not genre or not genre_to_dest:
+        return None
+    
+    # Check synonyms first
+    normalized = genre.lower().strip()
+    if normalized in GENRE_SYNONYMS:
+        canonical = GENRE_SYNONYMS[normalized]
+        if canonical in genre_to_dest:
+            return genre_to_dest[canonical]
+    
+    # Try fuzzy matching with difflib (built-in)
+    from difflib import SequenceMatcher
+    
+    best_match = None
+    best_score = 0.0
+    
+    for config_genre in genre_to_dest.keys():
+        score = SequenceMatcher(None, normalized, config_genre.lower()).ratio()
+        
+        # Also check against canonical names from synonyms
+        if normalized in GENRE_SYNONYMS:
+            canonical = GENRE_SYNONYMS[normalized].lower()
+            alt_score = SequenceMatcher(None, canonical, config_genre.lower()).ratio()
+            score = max(score, alt_score)
+        
+        if score > best_score:
+            best_score = score
+            best_match = config_genre
+    
+    if best_score >= threshold:
+        return genre_to_dest[best_match]
     
     return None
 
