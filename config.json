@@ -27,5 +27,6 @@
     "Natural Rhythm": "House",
     "Salt Queen": "House"
   },
-  "label_source_tag": "label"
+  "label_source_tag": "label",
+  "fuzzy_threshold": 0.8
 }

@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import urllib.parse
@@ -704,7 +705,8 @@ def find_genre_destination(genre: str, genre_to_dest: Dict[str, str]) -> Optiona
             return result
     
     # Fuzzy matching: try to find similar genre in config
-    fuzzy_result = _find_fuzzy_genre(genre, genre_to_dest)
+    fuzzy_threshold = 0.8  # Default, can be overridden via config
+    fuzzy_result = _find_fuzzy_genre(genre, genre_to_dest, fuzzy_threshold)
     if fuzzy_result:
         return fuzzy_result
     
@@ -783,9 +785,7 @@ def _find_fuzzy_genre(genre: str, genre_to_dest: Dict[str, str], threshold: floa
         if canonical in genre_to_dest:
             return genre_to_dest[canonical]
     
-    # Try fuzzy matching with difflib (built-in)
-    from difflib import SequenceMatcher
-    
+    # Try fuzzy matching with difflib (already imported at module level)
     best_match = None
     best_score = 0.0
     
