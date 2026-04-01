@@ -58,13 +58,15 @@ sudo apt install ffmpeg python3
 ## Technical Details
 
 - **Metadata Source**: Artist and title from file metadata (ffprobe); Label from file metadata (ffprobe) or online lookup
-- **Genre Lookup**: iTunes Search API (primary), MusicBrainz API (fallback)
-- **Label Lookup**: iTunes Search API (when metadata missing, with track ID lookup)
+- **Genre/Label Lookup**: iTunes Search API (primary), Bandcamp (fallback), MusicBrainz, Discogs
+- **Label Lookup**: iTunes Search API (when metadata missing, with track ID lookup), Bandcamp fallback
 - **Sorting Priority**: Label mapping first, then Genre mapping as fallback
 - **Subgenre Hierarchy**: Subgenres automatically map to parent genres (e.g., "Electro House" → "House")
+- **Fuzzy Genre Matching**: Configurable threshold (default 0.8) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
 - **Timeouts**: 5 seconds for ffprobe, 10 seconds for HTTP requests
 - **Output**: Files moved to genre-specific or label-specific folders as defined in config.json
 - **Logging**: JSON log of non-processed files (normal) or audit log (dry-run)
+- **Caching**: In-memory cache for online lookups to avoid repeated API calls
 
 ## Configuration
 
@@ -82,7 +84,8 @@ Create a `config.json` file in the same directory as the script:
     "Warp Records": "/path/to/warp",
     "Planet Mu": "/path/to/planet-mu"
   },
-  "label_source_tag": "label"  // Optional: specify which tag to use for label (e.g., 'TPUB')
+  "label_source_tag": "label",  // Optional: specify which tag to use for label (e.g., 'TPUB')
+  "fuzzy_threshold": 0.8        // Optional: fuzzy genre matching threshold (0.0-1.0)
 }
 ```
 
