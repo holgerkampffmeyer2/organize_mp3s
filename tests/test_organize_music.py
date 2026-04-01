@@ -5,6 +5,7 @@ Unit tests for the MP3/M4A organizer.
 
 import json
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -319,7 +320,393 @@ class TestExtractParentGenre(unittest.TestCase):
         self.assertIsNone(organize_music._extract_parent_genre(None))
 
 
-class TestDetermineDestination(unittest.TestCase):
+class TestNormalizeGenre(unittest.TestCase):
+    """Tests for _normalize_genre function."""
+
+    def test_drum_and_bass_normalization(self):
+        result = organize_music._normalize_genre("drum and bass")
+        self.assertEqual(result, "DRUM N BASS")
+
+    def test_drum_amp_bass_normalization(self):
+        result = organize_music._normalize_genre("drum & bass")
+        self.assertEqual(result, "DRUM N BASS")
+
+    def test_edm_normalization(self):
+        result = organize_music._normalize_genre("electronic dance music")
+        self.assertEqual(result, "EDM")
+
+    def test_idm_normalization(self):
+        result = organize_music._normalize_genre("intelligent dance music")
+        self.assertEqual(result, "IDM")
+
+    def test_uk_garage_normalization(self):
+        result = organize_music._normalize_genre("uk garage")
+        self.assertEqual(result, "UKG")
+
+    def test_title_case_for_regular_genre(self):
+        result = organize_music._normalize_genre("jazz")
+        self.assertEqual(result, "Jazz")
+
+    def test_empty_string(self):
+        result = organize_music._normalize_genre("")
+        self.assertEqual(result, "")
+
+    def test_none(self):
+        result = organize_music._normalize_genre(None)
+        self.assertEqual(result, "")
+
+    def test_already_normalized(self):
+        result = organize_music._normalize_genre("Techno")
+        self.assertEqual(result, "Techno")
+
+
+class TestIsElectronicGenre(unittest.TestCase):
+    """Tests for _is_electronic_genre function."""
+
+    def test_techno_is_electronic(self):
+        self.assertTrue(organize_music._is_electronic_genre("Techno"))
+
+    def test_house_is_electronic(self):
+        self.assertTrue(organize_music._is_electronic_genre("House"))
+
+    def test_electronic_is_electronic(self):
+        self.assertTrue(organize_music._is_electronic_genre("Electronic"))
+
+    def test_drum_and_bass_is_electronic(self):
+        self.assertTrue(organize_music._is_electronic_genre("Drum and Bass"))
+
+    def test_edm_is_electronic(self):
+        self.assertTrue(organize_music._is_electronic_genre("EDM"))
+
+    def test_electro_house_is_electronic(self):
+        self.assertTrue(organize_music._is_electronic_genre("Electro House"))
+
+    def test_subgenre_contains_electronic_keyword(self):
+        self.assertTrue(organize_music._is_electronic_genre("Deep House"))
+
+    def test_jazz_is_not_electronic(self):
+        self.assertFalse(organize_music._is_electronic_genre("Jazz"))
+
+    def test_rock_is_not_electronic(self):
+        self.assertFalse(organize_music._is_electronic_genre("Rock"))
+
+    def test_pop_is_not_electronic(self):
+        self.assertFalse(organize_music._is_electronic_genre("Pop"))
+
+    def test_empty_string(self):
+        self.assertFalse(organize_music._is_electronic_genre(""))
+
+    def test_none(self):
+        self.assertFalse(organize_music._is_electronic_genre(None))
+
+    def test_case_insensitive(self):
+        self.assertTrue(organize_music._is_electronic_genre("TECHNO"))
+
+    def test_label_indicator_short_genre(self):
+        self.assertTrue(organize_music._is_electronic_genre("Trax Records"))
+
+
+class TestExtractMetadataTag(unittest.TestCase):
+    """Tests for _extract_metadata_tag function."""
+
+    @patch('subprocess.run')
+    def test_tag_found(self, mock_run):
+        """Test when tag is found in metadata."""
+        mock_run.return_value.stdout = "Test Value\n"
+        mock_run.return_value.returncode = 0
+
+        result = organize_music._extract_metadata_tag(Path("test.mp3"), "artist")
+        self.assertEqual(result, "Test Value")
+
+    @patch('subprocess.run')
+    def test_tag_not_found(self, mock_run):
+        """Test when tag is not found."""
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.returncode = 1
+
+        result = organize_music._extract_metadata_tag(Path("test.mp3"), "artist")
+        self.assertIsNone(result)
+
+    @patch('subprocess.run')
+    def test_tag_whitespace_only(self, mock_run):
+        """Test when tag is whitespace only."""
+        mock_run.return_value.stdout = "   \n"
+        mock_run.return_value.returncode = 0
+
+        result = organize_music._extract_metadata_tag(Path("test.mp3"), "artist")
+        self.assertIsNone(result)
+
+    @patch('subprocess.run')
+    def test_timeout_expired(self, mock_run):
+        """Test when subprocess times out."""
+        mock_run.side_effect = subprocess.TimeoutExpired("cmd", 1)
+
+        result = organize_music._extract_metadata_tag(Path("test.mp3"), "artist")
+        self.assertIsNone(result)
+
+    @patch('subprocess.run')
+    def test_called_process_error(self, mock_run):
+        """Test when subprocess raises CalledProcessError."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
+
+        result = organize_music._extract_metadata_tag(Path("test.mp3"), "artist")
+        self.assertIsNone(result)
+
+    @patch('subprocess.run')
+    def test_file_not_found(self, mock_run):
+        """Test when ffprobe is not found."""
+        mock_run.side_effect = FileNotFoundError("ffprobe")
+
+        result = organize_music._extract_metadata_tag(Path("test.mp3"), "artist")
+        self.assertIsNone(result)
+
+
+class TestFindGenreDestinationEdgeCases(unittest.TestCase):
+    """Additional edge case tests for find_genre_destination."""
+
+    def test_empty_genre_to_dest(self):
+        """Test with empty genre mapping."""
+        result = organize_music.find_genre_destination("Test Genre", {})
+        self.assertIsNone(result)
+
+    def test_whitespace_only_genre(self):
+        """Test with whitespace-only genre."""
+        genre_to_dest = {"Test Genre": "/path/to/dest"}
+        result = organize_music.find_genre_destination("   ", genre_to_dest)
+        self.assertIsNone(result)
+
+    def test_genre_not_in_mapping(self):
+        """Test when genre is not in mapping."""
+        genre_to_dest = {"Other Genre": "/path/to/dest"}
+        result = organize_music.find_genre_destination("Test Genre", genre_to_dest)
+        self.assertIsNone(result)
+
+    def test_none_genre(self):
+        """Test with None genre."""
+        genre_to_dest = {"Test Genre": "/path/to/dest"}
+        result = organize_music.find_genre_destination(None, genre_to_dest)
+        self.assertIsNone(result)
+
+    def test_subgenre_fallback_chain(self):
+        """Test that subgenre hierarchy chain works."""
+        genre_to_dest = {"House": "/path/to/house"}
+        result = organize_music.find_genre_destination("Deep Electro House", genre_to_dest)
+        self.assertEqual(result, "/path/to/house")
+
+    def test_comma_separated_partial_match(self):
+        """Test comma-separated key matching."""
+        genre_to_dest = {"House, Techno": "/path/to/edm"}
+        result = organize_music.find_genre_destination("Techno", genre_to_dest)
+        self.assertEqual(result, "/path/to/edm")
+
+
+class TestDetermineFailureReasonEdgeCases(unittest.TestCase):
+    """Additional edge case tests for determine_failure_reason."""
+
+    def test_label_mapped_but_not_found(self):
+        """Test when label exists but not in mapping."""
+        result = organize_music.determine_failure_reason("Unknown Label", {"Other Label": "/dest"}, None)
+        self.assertEqual(result, "label_not_mapped")
+
+    def test_no_label_mapping_configured_genre_available(self):
+        """Test when no label mapping but genre available."""
+        result = organize_music.determine_failure_reason(None, {}, "Test Genre")
+        self.assertEqual(result, "genre_not_mapped")
+
+    def test_label_mapping_empty_but_label_exists(self):
+        """Test when label mapping is empty dict but label exists."""
+        result = organize_music.determine_failure_reason("Some Label", {}, "Test Genre")
+        self.assertEqual(result, "label_not_mapped")  # No label mapping, so can't use label
+
+    def test_label_and_mapping_exist_but_label_not_mapped(self):
+        """Test when label and mapping exist but label not in mapping."""
+        result = organize_music.determine_failure_reason("Unmapped Label", {"Mapped Label": "/dest"}, None)
+        self.assertEqual(result, "label_not_mapped")
+
+
+class TestProcessFileEdgeCases(unittest.TestCase):
+    """Additional edge case tests for process_file."""
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_missing_artist(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                            mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
+        """Test when artist is missing from metadata."""
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = ""  # No artist
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = "Test Title\n"
+            return mock_result
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {}, "genre_map": {}},
+            dry_run=True
+        )
+
+        self.assertEqual(result['action'], 'leave')
+        self.assertEqual(result['reason'], 'missing_metadata_artist')
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_missing_title(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                          mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
+        """Test when title is missing from metadata."""
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = "Test Artist\n"
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = ""  # No title
+            return mock_result
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {}, "genre_map": {}},
+            dry_run=True
+        )
+
+        self.assertEqual(result['action'], 'leave')
+        self.assertEqual(result['reason'], 'missing_metadata_title')
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_config_without_label_map(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                                     mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
+        """Test when config does not contain label_map."""
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = "Test Artist\n"
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = "Test Title\n"
+            return mock_result
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"genre_map": {}},  # No label_map
+            dry_run=True
+        )
+
+        # Should not error, just continue without label mapping
+        self.assertIn(result['action'], ['move', 'leave'])
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_config_without_genre_map(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                                      mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
+        """Test when config does not contain genre_map."""
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = "Test Artist\n"
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = "Test Title\n"
+            return mock_result
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {}},  # No genre_map
+            dry_run=True
+        )
+
+        # Should not error, just continue without genre mapping
+        self.assertIn(result['action'], ['move', 'leave'])
+
+    @patch('subprocess.run')
+    def test_processing_exception(self, mock_run):
+        """Test when an exception occurs during processing."""
+        mock_run.side_effect = Exception("Unexpected error")
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {}, "genre_map": {}},
+            dry_run=True
+        )
+
+        self.assertEqual(result['action'], 'leave')
+        self.assertIn('processing_error', result['reason'])
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('subprocess.run')
+    def test_label_from_metadata_used(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+                                      mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
+        """Test when label is found in metadata."""
+        def subprocess_side_effect(*args, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
+                mock_result.stdout = "Test Artist\n"
+            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
+                mock_result.stdout = "Test Title\n"
+            return mock_result
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        mock_label_metadata.return_value = "Test Label"
+        mock_label_online.return_value = None  # Should not be called
+        mock_genre_metadata.return_value = "Test Genre"
+        mock_genre_online.return_value = None  # Should not be called
+        mock_determine_dest.return_value = ("/dest/path", True, False, "Test Genre", "Test Label")
+        mock_exists.return_value = False
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {}},
+            dry_run=True
+        )
+
+        self.assertEqual(result['label'], "Test Label")
+        mock_label_online.assert_not_called()  # Online lookup skipped since metadata found
+        mock_genre_online.assert_not_called()  # Online lookup skipped since metadata found
+
+
+if __name__ == '__main__':
+    unittest.main()
     """Tests for determine_destination function."""
 
     def test_label_mapping_used(self):
