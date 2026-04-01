@@ -181,12 +181,15 @@ class TestGetGenreOnline(unittest.TestCase):
 
     @patch('urllib.request.urlopen')
     def test_genre_found_musicbrainz(self, mock_urlopen):
-        """Test when genre is found via MusicBrainz (iTunes fails)."""
+        """Test when genre is found via MusicBrainz (iTunes and Bandcamp fail)."""
         # Mock the responses (context managers)
         itunes_resp = MagicMock()
         itunes_resp.__enter__.return_value.read.return_value = json.dumps({
             'resultCount': 0
         }).encode()
+        
+        bandcamp_resp = MagicMock()
+        bandcamp_resp.__enter__.return_value.read.return_value = '<html></html>'
         
         mb_search_resp = MagicMock()
         mb_search_resp.__enter__.return_value.read.return_value = json.dumps({
@@ -203,11 +206,11 @@ class TestGetGenreOnline(unittest.TestCase):
             'release-group': {'tags': [{'name': 'Test Genre'}]}
         }).encode()
 
-        mock_urlopen.side_effect = [itunes_resp, mb_search_resp, mb_rg_resp, mb_tag_resp]
+        mock_urlopen.side_effect = [itunes_resp, bandcamp_resp, mb_search_resp, mb_rg_resp, mb_tag_resp]
 
         result = organize_music.get_genre_online("Test Artist", "Test Title")
         self.assertEqual(result, "Test Genre")
-        self.assertEqual(mock_urlopen.call_count, 4)
+        self.assertEqual(mock_urlopen.call_count, 5)
 
     @patch('urllib.request.urlopen')
     def test_genre_not_found_online(self, mock_urlopen):
@@ -229,6 +232,116 @@ class TestGetGenreOnline(unittest.TestCase):
 
         result = organize_music.get_genre_online("Test Artist", "Test Title")
         self.assertIsNone(result)
+
+
+class TestGetGenreFromBandcamp(unittest.TestCase):
+    """Tests for get_genre_from_bandcamp function."""
+
+    def setUp(self):
+        """Clear Bandcamp cache before each test to ensure test isolation."""
+        if hasattr(organize_music, '_bandcamp_cache'):
+            organize_music._bandcamp_cache.clear()
+
+    def test_parse_bandcamp_house_genre(self):
+        """Test parsing House genre from Bandcamp HTML."""
+        html = '<html><a class="tag">house</a><a class="tag">tech house</a></html>'
+        genre, label = organize_music._parse_bandcamp_search_results(html, "Artist", "Title")
+        self.assertEqual(genre, "House")
+
+    def test_parse_bandcamp_techno_genre(self):
+        """Test parsing Techno genre from Bandcamp HTML."""
+        html = '<html><a class="tag">techno</a></html>'
+        genre, label = organize_music._parse_bandcamp_search_results(html, "Artist", "Title")
+        self.assertEqual(genre, "Techno")
+
+    def test_parse_bandcamp_no_results(self):
+        """Test parsing when no results."""
+        html = '<html>No results</html>'
+        genre, label = organize_music._parse_bandcamp_search_results(html, "Artist", "Title")
+        self.assertIsNone(genre)
+        self.assertIsNone(label)
+
+    def test_parse_bandcamp_afro_house(self):
+        """Test parsing Afro House genre."""
+        html = '<html><a class="tag">afro house</a></html>'
+        genre, label = organize_music._parse_bandcamp_search_results(html, "Artist", "Title")
+        self.assertEqual(genre, "House")
+
+    def test_parse_bandcamp_electronic_fallback(self):
+        """Test parsing Electronic genre."""
+        html = '<html><a class="tag">electronic</a></html>'
+        genre, label = organize_music._parse_bandcamp_search_results(html, "Artist", "Title")
+        self.assertEqual(genre, "Electronic")
+
+    def test_bandcamp_cache(self):
+        """Test that Bandcamp results are cached."""
+        organize_music._bandcamp_cache["test:title"] = ("House", "Test Label")
+        
+        genre, label = organize_music.get_genre_from_bandcamp("Test", "Title")
+        self.assertEqual(genre, "House")
+        self.assertEqual(label, "Test Label")
+
+
+class TestExtractParentGenreExtended(unittest.TestCase):
+    """Additional tests for _extract_parent_genre with extended genres."""
+
+    def test_afro_house(self):
+        result = organize_music._extract_parent_genre("Afro House")
+        self.assertEqual(result, "house")
+
+    def test_melodic_house(self):
+        result = organize_music._extract_parent_genre("Melodic House")
+        self.assertEqual(result, "house")
+
+    def test_organic_house(self):
+        result = organize_music._extract_parent_genre("Organic House")
+        self.assertEqual(result, "house")
+
+    def test_ambient(self):
+        result = organize_music._extract_parent_genre("Ambient")
+        self.assertEqual(result, "ambient")
+
+    def test_dubstep(self):
+        result = organize_music._extract_parent_genre("Dubstep")
+        self.assertEqual(result, "dubstep")
+
+    def test_breakbeat(self):
+        result = organize_music._extract_parent_genre("Breakbeat")
+        self.assertEqual(result, "breakbeat")
+
+    def test_experimental(self):
+        result = organize_music._extract_parent_genre("Experimental")
+        self.assertEqual(result, "experimental")
+
+
+class TestLookupLabelOnlineBandcamp(unittest.TestCase):
+    """Tests for lookup_label_online with Bandcamp fallback."""
+
+    @patch('organize_music.get_genre_from_bandcamp')
+    @patch('urllib.request.urlopen')
+    def test_label_found_on_itunes(self, mock_urlopen, mock_bandcamp):
+        """Test label found via iTunes."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            'resultCount': 1,
+            'results': [{'label': 'Test Label'}]
+        }).encode()
+        mock_urlopen.return_value.__enter__ = MagicMock(return_value=mock_response)
+        mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
+
+        result = organize_music.lookup_label_online("Artist", "Title")
+        self.assertEqual(result, "Test Label")
+        mock_bandcamp.assert_not_called()
+
+    @patch('organize_music.get_genre_from_bandcamp')
+    @patch('urllib.request.urlopen')
+    def test_label_fallback_to_bandcamp(self, mock_urlopen, mock_bandcamp):
+        """Test label fallback to Bandcamp when iTunes fails."""
+        mock_urlopen.side_effect = Exception("Network error")
+        mock_bandcamp.return_value = (None, "Feather Records")
+
+        result = organize_music.lookup_label_online("Artist", "Title")
+        self.assertEqual(result, "Feather Records")
 
 
 class TestFindGenreDestination(unittest.TestCase):

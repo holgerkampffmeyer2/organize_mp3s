@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -82,6 +83,7 @@ def get_genre_from_metadata(file_path: Path) -> Optional[str]:
 def lookup_label_online(artist: str, title: str) -> Optional[str]:
     """
     Lookup label via online services (iTunes primary with track ID lookup).
+    Falls back to Bandcamp if iTunes fails.
     
     Args:
         artist: Artist name
@@ -90,20 +92,17 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
     Returns:
         Label string if found, None otherwise
     """
+    # Try iTunes first
     try:
-        # Search for track on iTunes with improved parameters
         query = urllib.parse.quote(f"{artist} {title}")
         url = f"https://itunes.apple.com/search?term={query}&entity=musicTrack&attribute=songTerm&limit=5"
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
             if data['resultCount'] > 0:
-                # Check multiple results for best label match
-                for track in data['results'][:3]:  # Check top 3 results
-                    # First check if label is directly available
+                for track in data['results'][:3]:
                     label = track.get('label')
                     if label and label.strip():
                         return label.strip()
-                    # If not, get detailed track info using trackId
                     elif 'trackId' in track:
                         track_id = track['trackId']
                         detail_url = f"https://itunes.apple.com/lookup?id={track_id}"
@@ -115,6 +114,12 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
                                     return detail_label.strip()
     except Exception:
         pass
+    
+    # Fallback to Bandcamp
+    _, bandcamp_label = get_genre_from_bandcamp(artist, title)
+    if bandcamp_label:
+        return bandcamp_label
+    
     return None
 
 
@@ -174,6 +179,7 @@ def get_genre_from_metadata(file_path: Path) -> Optional[str]:
 
 # Cache for genre lookups to avoid repeated API calls
 _genre_cache = {}
+_bandcamp_cache = {}
 
 def _is_electronic_genre(genre: str) -> bool:
     """Check if a genre is likely electronic music."""
@@ -210,6 +216,107 @@ def _is_electronic_genre(genre: str) -> bool:
             return True
             
     return False
+
+
+def get_genre_from_bandcamp(artist: str, title: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Lookup genre and label via Bandcamp search.
+    Bandcamp is excellent for electronic music genres as artists explicitly tag their music.
+    
+    Args:
+        artist: Artist name
+        title: Track title
+        
+    Returns:
+        Tuple of (genre, label) or (None, None) if not found
+    """
+    cache_key = f"{artist.lower()}:{title.lower()}"
+    if cache_key in _bandcamp_cache:
+        return _bandcamp_cache[cache_key]
+    
+    try:
+        query = urllib.parse.quote(f"{artist} {title}")
+        search_url = f"https://bandcamp.com/search?q={query}&item_type=t"
+        
+        request = urllib.request.Request(
+            search_url,
+            headers={'User-Agent': 'MP3Organizer/1.0'}
+        )
+        
+        with urllib.request.urlopen(request, timeout=10) as response:
+            html_content = response.read().decode('utf-8', errors='ignore')
+            
+            result = _parse_bandcamp_search_results(html_content, artist, title)
+            
+            if result:
+                _bandcamp_cache[cache_key] = result
+                return result
+                
+    except Exception:
+        pass
+    
+    _bandcamp_cache[cache_key] = (None, None)
+    return (None, None)
+
+
+def _parse_bandcamp_search_results(html_content: str, artist: str, title: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse Bandcamp search results HTML to find genre and label.
+    
+    Args:
+        html_content: HTML content from Bandcamp search
+        artist: Artist name to match
+        title: Track title to match
+        
+    Returns:
+        Tuple of (genre, label) or (None, None)
+    """
+    genre = None
+    label = None
+    
+    tag_pattern = r'<a[^>]+class="tag"[^>]*>([^<]+)</a>'
+    tags = re.findall(tag_pattern, html_content, re.IGNORECASE)
+    
+    house_related = {'house', 'tech house', 'afro house', 'deep house', 'disco house', 
+                     'melodic house', 'organic house', 'future house', 'progressive house',
+                     'tropical house', 'funky house'}
+    
+    electronic_genres = {'techno', 'tech house', 'trance', 'ambient', 'electronica', 
+                        'downtempo', 'chillout', 'electro', 'dubstep', 'drum and bass',
+                        'dnb', 'drone', 'idm', 'experimental'}
+    
+    all_tags = [tag.strip().lower() for tag in tags]
+    
+    for tag in all_tags:
+        if tag in house_related:
+            genre = 'House'
+            break
+        elif tag in electronic_genres:
+            genre = tag.title()
+            break
+        elif tag == 'electronic':
+            genre = 'Electronic'
+            break
+    
+    if not genre:
+        for tag in all_tags:
+            if 'house' in tag:
+                genre = 'House'
+                break
+            elif 'techno' in tag:
+                genre = 'Techno'
+                break
+            elif 'trance' in tag:
+                genre = 'Trance'
+                break
+    
+    label_pattern = r'<div[^>]+class="artist"[^>]*>.*?<a[^>]*>([^<]+)</a>'
+    label_match = re.search(label_pattern, html_content, re.IGNORECASE | re.DOTALL)
+    if label_match:
+        label = label_match.group(1).strip()
+    
+    return (genre, label)
+
 
 def _normalize_genre(genre: str) -> str:
     """Normalize genre to standard forms."""
@@ -293,6 +400,12 @@ def get_genre_online(artist: str, title: str) -> Optional[str]:
                     return normalized_genre
     except Exception:
         pass
+    
+    # Try Bandcamp (excellent for electronic music genres)
+    bandcamp_genre, bandcamp_label = get_genre_from_bandcamp(artist, title)
+    if bandcamp_genre:
+        _genre_cache[cache_key] = bandcamp_genre
+        return bandcamp_genre
     
     # Try Discogs (good for electronic music)
     try:
@@ -444,6 +557,14 @@ def _extract_parent_genre(genre: str) -> Optional[str]:
         return 'dance'
     if 'electronic' in genre_lower:
         return 'electronic'
+    if 'ambient' in genre_lower:
+        return 'ambient'
+    if 'dubstep' in genre_lower:
+        return 'dubstep'
+    if 'breakbeat' in genre_lower:
+        return 'breakbeat'
+    if 'experimental' in genre_lower:
+        return 'experimental'
     
     return None
 
