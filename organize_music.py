@@ -874,6 +874,11 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
             )
             if title_result.returncode == 0 and title_result.stdout.strip():
                 title = title_result.stdout.strip()
+                
+                # Clean title: Remove artist prefix if present (e.g., "Artist - Title" -> "Title")
+                # This is common in metadata and helps with online lookups
+                if artist and title.lower().startswith(artist.lower() + ' - '):
+                    title = title[len(artist) + 3:].strip()
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
             pass
         
@@ -904,6 +909,9 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
         genre_from_metadata = get_genre_from_metadata(file_path)
         
         # Get genre from online lookup if needed
+        # Try online genre lookup when:
+        # 1. No genre in metadata, OR  
+        # 2. No label available but label_map exists (genre can determine destination)
         genre_from_online = None
         if genre_from_metadata is None:
             genre_from_online = get_genre_online(artist, title)
