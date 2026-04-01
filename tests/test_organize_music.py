@@ -782,12 +782,13 @@ class TestProcessFileEdgeCases(unittest.TestCase):
     @patch('organize_music.lookup_label_online')
     @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
+    @patch('organize_music.find_genre_destination')
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
     @patch('subprocess.run')
     def test_label_from_metadata_used(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
-                                      mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
+                                      mock_find_genre, mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
         """Test when label is found in metadata."""
         def subprocess_side_effect(*args, **kwargs):
             mock_result = MagicMock()
@@ -803,6 +804,7 @@ class TestProcessFileEdgeCases(unittest.TestCase):
         mock_label_metadata.return_value = "Test Label"
         mock_label_online.return_value = None  # Should not be called
         mock_genre_metadata.return_value = "Test Genre"
+        mock_find_genre.return_value = "/dest/path"  # Genre is mapped, so online lookup won't be called
         mock_genre_online.return_value = None  # Should not be called
         mock_determine_dest.return_value = ("/dest/path", True, False, "Test Genre", "Test Label")
         mock_exists.return_value = False

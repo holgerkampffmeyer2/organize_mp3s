@@ -910,10 +910,18 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
         
         # Get genre from online lookup if needed
         # Try online genre lookup when:
-        # 1. No genre in metadata, OR  
-        # 2. No label available but label_map exists (genre can determine destination)
+        # 1. No genre in metadata, OR
+        # 2. Genre from metadata is not mapped (e.g., "Hip-Hop/Rap" not in config)
         genre_from_online = None
-        if genre_from_metadata is None:
+        genre_to_dest = config.get('genre_map', {})
+        
+        # Check if metadata genre is mapped
+        metadata_genre_mapped = False
+        if genre_from_metadata:
+            mapped = find_genre_destination(genre_from_metadata, genre_to_dest)
+            metadata_genre_mapped = mapped is not None
+        
+        if genre_from_metadata is None or not metadata_genre_mapped:
             genre_from_online = get_genre_online(artist, title)
         
         # Determine final genre
