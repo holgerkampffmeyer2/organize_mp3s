@@ -57,57 +57,55 @@ Current `config.json` genre_map:
 "Sephia": "DnB",
 "Samples From Mars": "House",
 "Tankfloor": "House",
-"Natural Rhythm": "House"
+"Natural Rhythm": "House",
+"Salt Queen": "House"
 ```
+
+### 6. Fuzzy Genre Matching (DONE)
+- Added `_find_fuzzy_genre()` with difflib (built-in)
+- Added `GENRE_SYNONYMS` dict with 30+ genre synonyms
+- Threshold: 80% similarity
+- Covers: hip hop, dnb, edm, drum & bass variants, etc.
 
 ## Current Results
 
 | Metric | Value |
 |--------|-------|
-| Files organized | ~37 |
-| Remaining (label_missing) | 5 |
-| Remaining (missing_metadata) | 2 |
+| Files organized | 21 |
+| Remaining (missing_metadata) | 1 |
 
 ## 🚧 Open Issues
 
-### 1. Files Not Yet Organized (7 remaining)
-1. **Corey James & David Pietras - Arlanda** - no label/genre found online
-2. **Dawiid & Josef K & Broseph - Chapo** - no label/genre found online
-3. **Kiano - Feelings** - no label/genre found online
-4. **Kryder, Tom Staar & The Wulf - De Puta Madre** - no label/genre found online
-5. **Regilio & Simon Kidzoo - Soledad** - no label/genre found online
-6. **TDK & kali-mist - Do the Damn Thing** - missing artist metadata
-7. **Kiro Prime - Calderon** - missing artist metadata
+### 1. Files Not Yet Organized (1 remaining)
+1. **TDK & kali-mist - Do the Damn Thing** - missing artist metadata in file
 
-### 2. SoundCloud Integration Missing
-These 5 tracks couldn't be found on Bandcamp/iTunes. Could add SoundCloud scraping as fallback.
+(Alle 5 "label_missing" Tracks wurden heute organisiert - sie waren bereits in den Zielordnern)
 
 ---
 
 ## 🔜 Future Improvements
 
 ### Priority 1: Quick Wins
-1. **Add more label mappings** for uncovered tracks
-2. **Add more genre mappings** for uncovered genres
+1. **Add more label mappings** for uncovered tracks (falls neue auftauchen)
 
 ### Priority 2: Better Online Sources
-1. **SoundCloud genre scraping** - for tracks not on Bandcamp/iTunes
-2. **iTunes improved search** - better matching for remixes
+1. **SoundCloud genre scraping** - falls weitere Tracks nicht gefunden werden
 
 ### Priority 3: Advanced Features
-1. **Persistent cache** - SQLite for genre/label lookups
-2. **Fuzzy genre matching** - handle misspellings
-3. **Auto-add unknown labels** - detect label from filename patterns
-4. **Configurable priority** - control label vs genre priority in config
+1. **Persistent cache** - SQLite für Genre/Label Lookups
+2. **Auto-add unknown labels** - Label aus Filename erkennen
+3. **Configurable priority** - Label vs Genre Priorität konfigurierbar
 
 ---
 
 ## Test Coverage
 
-- Total tests: 102
+- Total tests: 114
 - Coverage includes:
   - Bandcamp JSON-LD parsing
   - Genre hierarchy extraction
+  - Fuzzy genre matching
+  - Genre synonyms
   - Metadata tag extraction (timeout, errors)
   - Edge cases for genre/label lookup
   - Process file flow with mocks
