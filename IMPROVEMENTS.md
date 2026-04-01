@@ -5,124 +5,115 @@
 ### 1. Genre Hierarchy / Subgenre Fallback (DONE)
 Added `_extract_parent_genre()` function that maps subgenres to parent genres:
 - `Electro House` → `House`
-- `Progressive House` / `Progessive House` → `House`
+- `Progressive House` → `House`
 - `Deep House` → `House`
 - `Future House` → `House`
 - `Dance` → `House`
 - `Electronic` → `House`
-- etc.
+- `Afro House` → `House`
+- `Tech House` → `House`
+- `Ambient` → `Ambient`
+- `Dubstep` → `Dubstep`
+- `Breakbeat` → `Breakbeat`
+- `Experimental` → `Experimental`
 
-### 2. Priority Change (DONE)
-Changed logic in `determine_destination()`:
-- **Before**: Label mapping was tried first; genre mapping only if no label_map configured OR no label available
-- **After**: Label mapping first (if label exists), then genre mapping as fallback
+### 2. Bandcamp Integration (DONE)
+- Added `get_genre_from_bandcamp()` function
+- Parses JSON-LD schema for genre keywords
+- Direct URL fallback for artist pages
+- Label extraction from Bandcamp metadata
 
-### 3. Extended Genre Mappings (DONE)
-Added to `config.json`:
+### 3. Improved Genre Fallback Logic (DONE)
+- Online genre lookup when metadata genre not in config
+- Title cleaning: removes artist prefix for better online lookups
+- Added to config: `Hip-Hop/Rap` → `House`
+
+### 4. Extended Genre Mappings (DONE)
+Current `config.json` genre_map:
 ```json
+"Drum n Base": "DnB",
+"House": "House",
+"Deep Techno": "House",
+"Techno": "House",
+"Tech House": "House",
 "Electro House": "House",
 "Progressive House": "House",
 "Deep House": "House",
 "Future House": "House",
 "Tropical House": "House",
 "Dance": "House",
-"Electronic": "House"
+"Electronic": "House",
+"Hip-Hop/Rap": "House"
 ```
 
-## Results
+### 5. Extended Label Mappings (DONE)
+```json
+"MixCult Records": "House",
+"SHODAN RECORDS": "House",
+"Warner Music Group": "House",
+"Music is 4 Lovers": "House",
+"Unchained Soul Records": "DnB",
+"Feather Records": "House",
+"Sephia": "DnB",
+"Samples From Mars": "House",
+"Tankfloor": "House",
+"Natural Rhythm": "House"
+```
 
-| Metric | Before | After |
-|--------|--------|-------|
-| Files sorted | 2 | 14 |
-| Files remaining | 17 | 5 |
+## Current Results
 
-## Remaining Files (5)
+| Metric | Value |
+|--------|-------|
+| Files organized | ~37 |
+| Remaining (label_missing) | 7 |
+| Remaining (missing_metadata) | 2 |
+| Remaining (label_not_mapped) | 1 |
 
-These files have no genre metadata and would require online lookup:
-1. Corey James & David Pietras - Arlanda
-2. Dawiid & Josef K & Broseph - Chapo
-3. Kiano - Feelings
-4. Kryder, Tom Staar & The Wulf - De Puta Madre
-5. Regilio & Simon Kidzoo - Soledad
-6. Kiro Prime - Calderon (missing artist metadata)
+## 🚧 Open Issues
 
-## Future Improvements
+### 1. Files Not Yet Organized (10 remaining)
+1. **Corey James & David Pietras - Arlanda** - no label/genre found online
+2. **Dawiid & Josef K & Broseph - Chapo** - no label/genre found online
+3. **Kiano - Feelings** - no label/genre found online
+4. **Kryder, Tom Staar & The Wulf - De Puta Madre** - no label/genre found online
+5. **Regilio & Simon Kidzoo - Soledad** - no label/genre found online
+6. **Salt Queen - ARE U OK** - label "Salt Queen" found but not in config
+7. **TDK & kali-mist - Do the Damn Thing** - missing artist metadata
+8. **Kiro Prime - Calderon** - missing artist metadata
+9. **Various "target_exists"** - files already in destination folders
 
-1. **Online Genre Lookup Fallback**: When no genre in metadata, query iTunes/MusicBrainz
-2. **Configurable Priority**: Add `priority` option in config.json to control label vs genre priority
-3. **More Genre Hierarchies**: Add Techno → House, Trance → Trance, DnB → DnB mappings
+### 2. SoundCloud Integration Missing
+The track "Eminem, Nate Dogg - Shake That (Jordan Dae Remix)" has Genre=House on SoundCloud but we couldn't detect it via our current lookups. Could add SoundCloud scraping.
+
+### 3. Salt Queen Label Not Mapped
+Label found via online lookup but not in config. Either add to config or add auto-detection logic.
 
 ---
 
-## 🚀 Planned Improvements (Phase 1 - Bandcamp Integration)
+## 🔜 Future Improvements
 
-### Problem
-The track "Carmelo Galati - Deeper Love (Joy Afro Mix)" failed to organize because:
-- No label in metadata
-- iTunes lookup didn't find genre/label
-- Bandcamp has the track with explicit genre: **House/Tech House/Afro House** and label: **Feather Records**
+### Priority 1: Quick Wins
+1. **Add Salt Queen to label_map** → House
+2. **Add more genre mappings** for uncovered genres
 
-### Solution: Add Bandcamp as Genre/Label Source
+### Priority 2: Better Online Sources
+1. **SoundCloud genre scraping** - for tracks not on Bandcamp
+2. **iTunes improved search** - better matching for remixes
 
-#### Implementation Plan
-
-**1. Add Bandcamp Genre Lookup Function**
-```python
-def get_genre_from_bandcamp(artist: str, title: str) -> Optional[str]:
-    """
-    Lookup genre and label via Bandcamp search.
-    Bandcamp is excellent for electronic music genres.
-    
-    Returns:
-        Tuple of (genre, label) or (None, None)
-    """
-```
-
-**2. Extended Genre Hierarchy**
-Add more parent genre mappings in `_extract_parent_genre()`:
-- `Afro House` → `House`
-- `Disco House` → `House`
-- `Tech House` → `House`
-- `Deep House` → `House`
-- `Future House` → `House`
-- `Melodic House` → `House`
-- `Organic House` → `House`
-
-**3. Online Lookup Chain Update**
-Current: iTunes → MusicBrainz → Discogs
-New: iTunes → Bandcamp → MusicBrainz → Discogs
-
-**4. Label Lookup Enhancement**
-- Add Bandcamp as label source fallback
-- Parse label from Bandcamp metadata
-
-#### Code Changes Required
-
-| File | Changes |
-|------|---------|
-| `organize_music.py` | Add `get_genre_from_bandcamp()`, update `get_genre_online()`, extend `_extract_parent_genre()` |
-| `tests/test_organize_music.py` | Add tests for Bandcamp lookup |
-
-#### Risk Assessment
-- **Bandcamp scraping**: Low risk - uses public search API
-- **Rate limiting**: Medium - add delays between requests
-- **HTML parsing**: Low - use simple regex or beautifulsoup if needed
-
-#### Timeline
-- Implementation: ~1-2 hours
-- Testing: ~30 minutes
-- Total: ~2-3 hours
+### Priority 3: Advanced Features
+1. **Persistent cache** - SQLite for genre/label lookups
+2. **Fuzzy genre matching** - handle misspellings
+3. **Auto-add unknown labels** - detect label from filename patterns
+4. **Configurable priority** - control label vs genre priority in config
 
 ---
 
-## 📋 Future Phases (Not in Scope for Phase 1)
+## Test Coverage
 
-### Phase 2: Multi-Source Confidence
-- Add Discogs API (needs token)
-- Genre confidence scores from multiple sources
-- Voting mechanism for genre selection
-
-### Phase 3: Advanced Features
-- Persistent SQLite cache for genre/label lookups
-- Fuzzy genre matching
-- Auto-generate config.json genre mappings
+- Total tests: 102
+- Coverage includes:
+  - Bandcamp JSON-LD parsing
+  - Genre hierarchy extraction
+  - Metadata tag extraction (timeout, errors)
+  - Edge cases for genre/label lookup
+  - Process file flow with mocks
