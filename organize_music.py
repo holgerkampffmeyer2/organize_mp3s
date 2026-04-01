@@ -234,13 +234,15 @@ def get_genre_from_bandcamp(artist: str, title: str) -> Tuple[Optional[str], Opt
     if cache_key in _bandcamp_cache:
         return _bandcamp_cache[cache_key]
     
+    result = (None, None)
+    
     try:
         query = urllib.parse.quote(f"{artist} {title}")
         search_url = f"https://bandcamp.com/search?q={query}&item_type=t"
         
         request = urllib.request.Request(
             search_url,
-            headers={'User-Agent': 'MP3Organizer/1.0'}
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         )
         
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -248,7 +250,13 @@ def get_genre_from_bandcamp(artist: str, title: str) -> Tuple[Optional[str], Opt
             
             result = _parse_bandcamp_search_results(html_content, artist, title)
             
-            if result:
+            if result[0] is None:
+                result = _parse_bandcamp_from_json_ld(html_content)
+                
+            if result[0] is None and result[1] is None:
+                result = _try_direct_bandcamp_url(artist, title)
+            
+            if result[0] is not None or result[1] is not None:
                 _bandcamp_cache[cache_key] = result
                 return result
                 
@@ -259,9 +267,117 @@ def get_genre_from_bandcamp(artist: str, title: str) -> Tuple[Optional[str], Opt
     return (None, None)
 
 
+def _try_direct_bandcamp_url(artist: str, title: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Try to access Bandcamp page directly using artist name.
+    Uses multiple URL pattern variations to find the track.
+    """
+    artist_slug = artist.lower().replace(' ', '-').replace('&', '').replace("'", '').strip()
+    title_slug = title.lower().replace(' ', '-').replace('(', '').replace(')', '').replace('[', '').replace(']', '').replace("'", '').replace('&', '').strip()
+    
+    url_patterns = [
+        f"https://{artist_slug}.bandcamp.com/track/{title_slug}",
+        f"https://{artist_slug}.bandcamp.com/track/{artist_slug}-{title_slug}",
+    ]
+    
+    for url in url_patterns:
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
+            
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.status == 200:
+                    html_content = response.read().decode('utf-8', errors='ignore')
+                    
+                    result = _parse_bandcamp_from_json_ld(html_content)
+                    if result[0] is not None or result[1] is not None:
+                        return result
+                    
+        except Exception:
+            continue
+    
+    return (None, None)
+
+
+def _parse_bandcamp_from_json_ld(html_content: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse Bandcamp JSON-LD schema to extract genre keywords and label.
+    
+    Bandcamp embeds structured data with keywords/tags in the page.
+    """
+    genre = None
+    label = None
+    
+    json_ld_pattern = r'<script[^>]*type="application/ld\+json"[^>]*>([^<]+)</script>'
+    matches = re.findall(json_ld_pattern, html_content, re.IGNORECASE)
+    
+    keywords_found = []
+    
+    for match in matches:
+        try:
+            data = json.loads(match)
+            
+            if isinstance(data, dict):
+                keywords = data.get('keywords', [])
+                if isinstance(keywords, list):
+                    keywords_found.extend([k.lower() for k in keywords])
+                
+                publisher = data.get('publisher', {})
+                if isinstance(publisher, dict):
+                    label = publisher.get('name')
+                
+                if not label:
+                    by_artist = data.get('byArtist', {})
+                    if isinstance(by_artist, dict):
+                        label = by_artist.get('name')
+                    
+        except (json.JSONDecodeError, TypeError):
+            continue
+    
+    keywords_lower = [k.lower() for k in keywords_found]
+    
+    house_keywords = {'house', 'tech house', 'afro house', 'deep house', 'disco house',
+                     'melodic house', 'organic house', 'future house', 'progressive house',
+                     'tropical house', 'funky house', 'garage', 'funky'}
+    
+    dnb_keywords = {'drum and bass', 'drum and bass', 'dnb', 'drum&bass', 'drum n bass',
+                   'jungle', 'neurofunk', 'techstep', 'darkdrumandbass', 'deepdrumandbass'}
+    
+    techno_keywords = {'techno', 'hard techno', 'minimal'}
+    trance_keywords = {'trance', 'psytrance', 'progressive trance'}
+    
+    for kw in keywords_lower:
+        if kw in house_keywords:
+            genre = 'House'
+            break
+        elif kw in dnb_keywords:
+            genre = 'DnB'
+            break
+        elif kw in techno_keywords:
+            genre = 'Techno'
+            break
+        elif kw in trance_keywords:
+            genre = 'Trance'
+            break
+    
+    if not genre:
+        for kw in keywords_lower:
+            if 'house' in kw:
+                genre = 'House'
+                break
+            elif 'drum' in kw and 'bass' in kw:
+                genre = 'DnB'
+                break
+    
+    return (genre, label)
+
+
 def _parse_bandcamp_search_results(html_content: str, artist: str, title: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Parse Bandcamp search results HTML to find genre and label.
+    Tries JSON-LD schema parsing first, then falls back to HTML tag parsing.
     
     Args:
         html_content: HTML content from Bandcamp search
@@ -273,6 +389,16 @@ def _parse_bandcamp_search_results(html_content: str, artist: str, title: str) -
     """
     genre = None
     label = None
+    
+    json_ld_result = _parse_bandcamp_from_json_ld(html_content)
+    if json_ld_result[0] is not None or json_ld_result[1] is not None:
+        return json_ld_result
+    
+    search_result = _extract_first_search_result(html_content)
+    if search_result:
+        result = _fetch_and_parse_track_page(search_result)
+        if result[0] is not None or result[1] is not None:
+            return result
     
     tag_pattern = r'<a[^>]+class="tag"[^>]*>([^<]+)</a>'
     tags = re.findall(tag_pattern, html_content, re.IGNORECASE)
@@ -316,6 +442,58 @@ def _parse_bandcamp_search_results(html_content: str, artist: str, title: str) -
         label = label_match.group(1).strip()
     
     return (genre, label)
+
+
+def _extract_first_search_result(html_content: str) -> Optional[str]:
+    """
+    Extract the first track URL from Bandcamp search results.
+    
+    Args:
+        html_content: HTML content from Bandcamp search
+        
+    Returns:
+        First track URL or None
+    """
+    item_pattern = r'data-item-url="([^"]+)"'
+    matches = re.findall(item_pattern, html_content)
+    
+    for match in matches:
+        if '/track/' in match:
+            return match
+    
+    link_pattern = r'<a[^>]+href="(https://[^"]+\.bandcamp\.com/track/[^"]+)"'
+    matches = re.findall(link_pattern, html_content, re.IGNORECASE)
+    if matches:
+        return matches[0]
+    
+    return None
+
+
+def _fetch_and_parse_track_page(track_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Fetch and parse a Bandcamp track page.
+    
+    Args:
+        track_url: URL to the Bandcamp track page
+        
+    Returns:
+        Tuple of (genre, label)
+    """
+    try:
+        request = urllib.request.Request(
+            track_url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        
+        with urllib.request.urlopen(request, timeout=10) as response:
+            html_content = response.read().decode('utf-8', errors='ignore')
+            
+            return _parse_bandcamp_from_json_ld(html_content)
+            
+    except Exception:
+        pass
+    
+    return (None, None)
 
 
 def _normalize_genre(genre: str) -> str:
