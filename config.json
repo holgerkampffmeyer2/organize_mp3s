@@ -25,8 +25,11 @@
     "Samples From Mars": "House",
     "Tankfloor": "House",
     "Natural Rhythm": "House",
-    "Salt Queen": "House"
+    "Salt Queen": "House",
+    "Clavette": "House"
   },
   "label_source_tag": "label",
-  "fuzzy_threshold": 0.8
+  "fuzzy_threshold": 0.8,
+  "enrich_metadata": false,
+  "move": true
 }

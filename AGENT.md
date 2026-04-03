@@ -23,12 +23,17 @@ If the target file already exists, the file is left in place and logged.
         "Warp Records": "/path/to/warp",
         "Planet Mu": "/path/to/planet-mu"
       },
-      "label_source_tag": "label"  // Optional: specify which tag to use for label (e.g., 'TPUB')
+      "label_source_tag": "label",
+      "fuzzy_threshold": 0.8,
+      "enrich_metadata": false,
+      "move": true
     }
     ```
   - Add more genres or labels as needed.
   - If `label_source_tag` is provided, the script will try to read that specific tag (and its uppercase variant) for the label.
   - If `label_source_tag` is not provided, the script checks common label-related tags: 'label', 'Label', 'TPUB', 'publisher'.
+  - `enrich_metadata`: If true, writes missing metadata (label, genre, album, year) from online lookups back to the audio files.
+  - `move`: If true, moves files to destination (default: true). If false, determines destinations but doesn't move files.
 
 ## Algorithm Steps
 1. **Scan Directory**: Recursively find all `.mp3` and `.m4a` files in the source directory (default: current directory).
@@ -54,17 +59,23 @@ If the target file already exists, the file is left in place and logged.
     - **Genre Hierarchy**: Subgenres are mapped to parent genres (e.g., "Electro House" → "House", "Progressive House" → "House").
     - Look for match in `config.json` genre_map or label_map (keys are normalized to lowercase).
     - If no mapping found → leave file, log as `genre_not_mapped` or `label_not_mapped`.
-5. **Destination Check**:
+5. **Metadata Enrichment** (if enabled and not in dry-run):
+    - If label was found online but not in metadata → write label tag to file.
+    - If genre was found online but not in metadata → write genre tag to file.
+    - If album/year found online but not in metadata → write album/year tags to file.
+    - Enriched tags are logged in the result JSON under `enriched_tags`.
+6. **Destination Check**:
     - Construct destination path: `<dest_dir>/<filename>`.
     - If target file already exists → leave file, log as `target_exists`.
-6. **Move File** (unless in dry-run mode):
+7. **Move File** (if enabled and not in dry-run):
     - Create destination directory if it does not exist.
     - Move file to destination, preserving filename.
     - Note: Successful moves are **not** logged (only non-processed files are logged).
-7. **Logging**:
+8. **Logging**:
     - In normal mode: Creates `organization_results.json` with entries for files not moved.
     - In dry-run mode (`--dry-run` or `-n`): Creates `organization_audit.json` with entries for all files, indicating what action would have been taken.
     - Log entries include: file path, artist, title, detected genre (if available), detected label (if available), reason (or action/destination in dry-run).
+    - If enrichment enabled, also logs `enriched_tags` array with tags that were written to file.
 
 ## Usage
 ```bash
@@ -75,6 +86,11 @@ python3 organize_music.py [source_directory]
 python3 organize_music.py --dry-run [source_directory]
 # or
 python3 organize_music.py -n [source_directory]
+
+# Metadata enrichment mode (writes missing metadata tags from online sources to files)
+python3 organize_music.py --enrich-metadata [source_directory]
+# or
+python3 organize_music.py -e [source_directory]
 ```
 
 ## Dependencies

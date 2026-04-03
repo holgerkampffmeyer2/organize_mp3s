@@ -44,6 +44,52 @@ def _extract_metadata_tag(file_path: Path, tag: str) -> Optional[str]:
     return None
 
 
+def _write_metadata_tag(file_path: Path, tag: str, value: str) -> bool:
+    """
+    Write a specific tag to audio file metadata.
+    
+    Args:
+        file_path: Path to audio file
+        tag: Metadata tag to write
+        value: Value to write for the tag
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        escaped_value = value.replace("'", "'\\''")
+        suffix = file_path.suffix.lower()
+        temp_path = str(file_path) + '.tmp' + suffix
+        
+        cmd = [
+            'ffmpeg', '-i', str(file_path),
+            '-map', '0',
+            '-metadata', f'{tag}={escaped_value}',
+            '-codec', 'copy',
+            '-id3v2_version', '3',
+            '-y',
+            temp_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            os.replace(temp_path, str(file_path))
+            return True
+        else:
+            logger.warning(f"Failed to write metadata tag {tag} to {file_path}: {result.stderr[:200]}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+        logger.warning(f"Error writing metadata tag {tag} to {file_path}: {str(e)}")
+        temp_path = str(file_path) + '.tmp' + suffix if 'suffix' in locals() else str(file_path) + '.tmp'
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return False
+
+
 def get_label_from_metadata(file_path: Path, label_source_tag: Optional[str]) -> Optional[str]:
     """
     Extract label from audio file metadata only.
@@ -122,6 +168,37 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
         return bandcamp_label
     
     return None
+
+
+def get_additional_metadata_online(artist: str, title: str) -> Dict[str, Optional[str]]:
+    """
+    Lookup additional metadata (album, year, track_number) from online services.
+    
+    Args:
+        artist: Artist name
+        title: Track title
+        
+    Returns:
+        Dictionary with keys: album, year, track_number
+    """
+    result = {'album': None, 'year': None, 'track_number': None}
+    
+    try:
+        query = urllib.parse.quote(f"{artist} {title}")
+        url = f"https://itunes.apple.com/search?term={query}&entity=musicTrack&attribute=songTerm&limit=5"
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            if data['resultCount'] > 0:
+                track = data['results'][0]
+                result['album'] = track.get('collectionName')
+                result['track_number'] = track.get('trackNumber')
+                release_date = track.get('releaseDate')
+                if release_date:
+                    result['year'] = release_date[:4] if len(release_date) >= 4 else None
+    except Exception:
+        pass
+    
+    return result
 
 
 def find_label_destination(label: str, label_to_dest: Dict[str, str]) -> Optional[str]:
@@ -913,22 +990,23 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
     4. If we have no label and no genre -> lookup_failed
     5. If we have genre but it's not mapped -> genre_not_mapped
     """
-    has_label = label is not None and label_to_dest
+    has_label_map = bool(label_to_dest)  # Check if label_map is configured (even if empty)
+    has_label = label is not None
     
-    if has_label:
+    if has_label and has_label_map:
         return "label_not_mapped"
-    elif label is not None and not label_to_dest:
+    elif has_label and not has_label_map:
         return "label_not_mapped"
-    elif label is None and label_to_dest:
+    elif not has_label and has_label_map:
         return "label_missing"
-    elif label is None and genre is None:
+    elif not has_label and not has_label_map and not genre:
         return "lookup_failed"
     elif genre is not None:
         return "genre_not_mapped"
     return "lookup_failed"
 
 
-def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
+def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_metadata: bool = False) -> Dict:
     """
     Process a single audio file.
     
@@ -936,6 +1014,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
         file_path: Path to audio file
         config: Configuration dictionary
         dry_run: If True, only simulate the operation
+        enrich_metadata: If True, write missing metadata from online sources to files
         
     Returns:
         Dictionary with processing results
@@ -983,6 +1062,12 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
                 # This is common in metadata and helps with online lookups
                 if artist and title.lower().startswith(artist.lower() + ' - '):
                     title = title[len(artist) + 3:].strip()
+                
+                # Also remove common remix/version suffixes for better online lookups
+                # e.g., "Song Name (Remix)" -> "Song Name", "Song Name (Radio Edit)" -> "Song Name"
+                title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+                title = re.sub(r'\s*-\s*remix\s*$', '', title, flags=re.IGNORECASE).strip()
+                title = re.sub(r'\s*-\s*edit\s*$', '', title, re.IGNORECASE).strip()
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
             pass
         
@@ -1032,6 +1117,43 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
         final_genre = genre_from_metadata if genre_from_metadata is not None else genre_from_online
         result['genre'] = final_genre
         
+        # Enrich metadata from online sources if enabled (CLI or config) - skip in dry-run
+        enriched_tags = []
+        enrich_enabled = (enrich_metadata or config.get('enrich_metadata', False)) and not dry_run
+        if enrich_enabled:
+            # Get album from metadata
+            album_from_metadata = _extract_metadata_tag(file_path, 'album')
+            
+            # Get additional metadata from online if needed
+            additional_metadata = {}
+            if album_from_metadata is None or final_label is None or final_genre is None:
+                additional_metadata = get_additional_metadata_online(artist, title)
+            
+            # Enrich: Write label if missing in metadata but found online
+            if final_label and not label_from_metadata:
+                label_tag = config.get('label_source_tag', 'label')
+                if _write_metadata_tag(file_path, label_tag, final_label):
+                    enriched_tags.append(label_tag)
+            
+            # Enrich: Write genre if missing in metadata but found online
+            if final_genre and not genre_from_metadata:
+                if _write_metadata_tag(file_path, 'genre', final_genre):
+                    enriched_tags.append('genre')
+            
+            # Enrich: Write album if missing in metadata but found online
+            if additional_metadata.get('album') and not album_from_metadata:
+                if _write_metadata_tag(file_path, 'album', additional_metadata['album']):
+                    enriched_tags.append('album')
+            
+            # Enrich: Write year if missing in metadata but found online
+            if additional_metadata.get('year'):
+                existing_year = _extract_metadata_tag(file_path, 'date')
+                if not existing_year:
+                    if _write_metadata_tag(file_path, 'date', additional_metadata['year']):
+                        enriched_tags.append('year')
+        
+        result['enriched_tags'] = enriched_tags
+        
         # Determine destination
         genre_to_dest = config.get('genre_map', {})
         dest_dir, used_label, used_genre, detected_genre, detected_label = determine_destination(
@@ -1051,7 +1173,9 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
                 result['reason'] = 'target_exists'
                 result['action'] = 'leave'
             else:
-                if not dry_run:
+                # Check if move is enabled (config or CLI)
+                move_enabled = not dry_run and config.get('move', True)
+                if move_enabled:
                     # Create destination directory if it doesn't exist
                     Path(dest_dir).mkdir(parents=True, exist_ok=True)
                     # Move file
@@ -1067,13 +1191,14 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False) -> Dict:
         return result
 
 
-def organize_music(source_dir: str = ".", dry_run: bool = False) -> None:
+def organize_music(source_dir: str = ".", dry_run: bool = False, enrich_metadata: bool = False) -> None:
     """
     Main function to organize MP3 and M4A files.
     
     Args:
         source_dir: Directory to scan for audio files
         dry_run: If True, only simulate the operation
+        enrich_metadata: If True, write missing metadata from online sources to files
     """
     source_path = Path(source_dir).resolve()
     
@@ -1104,7 +1229,7 @@ def organize_music(source_dir: str = ".", dry_run: bool = False) -> None:
     # Process files
     results = []
     for audio_file in audio_files:
-        result = process_file(audio_file, config, dry_run)
+        result = process_file(audio_file, config, dry_run, enrich_metadata)
         results.append(result)
         
         # Print progress
@@ -1146,7 +1271,9 @@ if __name__ == "__main__":
                        help="Directory to scan for audio files (default: current directory)")
     parser.add_argument("--dry-run", "-n", action="store_true",
                        help="Only show what would be done, don't actually move files")
+    parser.add_argument("--enrich-metadata", "-e", action="store_true",
+                       help="Enrich missing metadata tags from online sources (label, genre, album, year)")
     
     args = parser.parse_args()
     
-    organize_music(args.source_directory, args.dry_run)
+    organize_music(args.source_directory, args.dry_run, args.enrich_metadata)

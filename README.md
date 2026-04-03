@@ -43,6 +43,11 @@ python3 organize_music.py [source_directory]
 python3 organize_music.py --dry-run [source_directory]
 # or
 python3 organize_music.py -n [source_directory]
+
+# Metadata enrichment mode (enriches missing metadata tags from online sources)
+python3 organize_music.py --enrich-metadata [source_directory]
+# or
+python3 organize_music.py -e [source_directory]
 ```
 
 - `source_directory`: The directory to scan for audio files (defaults to current directory if not provided).
@@ -63,6 +68,9 @@ sudo apt install ffmpeg python3
 - **Sorting Priority**: Label mapping first, then Genre mapping as fallback
 - **Subgenre Hierarchy**: Subgenres automatically map to parent genres (e.g., "Electro House" → "House")
 - **Fuzzy Genre Matching**: Configurable threshold (default 0.8) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
+- **Metadata Enrichment**: Optional feature to write missing metadata (label, genre, album, year) from online sources back to audio files (via CLI `--enrich-metadata` or config `enrich_metadata: true`)
+- **Move Control**: Configurable `move: true|false` option to enable/disable file movement (default: true). When `move: false`, the script determines destinations but doesn't move files.
+- **Execution Order**: 1) dry-run check, 2) metadata enrichment (if enabled), 3) file movement (if enabled)
 - **Timeouts**: 5 seconds for ffprobe, 10 seconds for HTTP requests
 - **Output**: Files moved to genre-specific or label-specific folders as defined in config.json
 - **Logging**: JSON log of non-processed files (normal) or audit log (dry-run)
@@ -84,8 +92,10 @@ Create a `config.json` file in the same directory as the script:
     "Warp Records": "/path/to/warp",
     "Planet Mu": "/path/to/planet-mu"
   },
-  "label_source_tag": "label",  // Optional: specify which tag to use for label (e.g., 'TPUB')
-  "fuzzy_threshold": 0.8        // Optional: fuzzy genre matching threshold (0.0-1.0)
+  "label_source_tag": "label",
+  "fuzzy_threshold": 0.8,
+  "enrich_metadata": false,
+  "move": true
 }
 ```
 
