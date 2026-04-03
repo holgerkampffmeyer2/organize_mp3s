@@ -18,8 +18,8 @@ The agent handles:
 - Prerequisites check (ffmpeg, python3)
 - File discovery and batch processing decisions
 - Metadata extraction from files
-- Online genre lookup: iTunes → MusicBrainz
-- Online label lookup: iTunes (when metadata missing)
+- Online genre lookup: iTunes → Bandcamp → MusicBrainz
+- Online label lookup: iTunes (when metadata missing), Bandcamp fallback
 - Error recovery and retries
 - Verification of organization results
 
