@@ -1619,5 +1619,301 @@ class TestMoveConfigOption(unittest.TestCase):
         mock_rename.assert_not_called()
 
 
+class TestParseFilenameToArtistTitle(unittest.TestCase):
+    """Tests for _parse_filename_to_artist_title function."""
+
+    def test_standard_format(self):
+        """Test standard 'Artist - Title.ext' format."""
+        result = organize_music._parse_filename_to_artist_title(Path("Artist - Title.mp3"))
+        self.assertEqual(result, ("Artist", "Title"))
+
+    def test_format_with_parentheses(self):
+        """Test filename with remix info in parentheses."""
+        result = organize_music._parse_filename_to_artist_title(Path("Central Cee 21 Savage - GBP (Jay Phoenix Remix).mp3"))
+        self.assertEqual(result, ("Central Cee 21 Savage", "GBP (Jay Phoenix Remix)"))
+
+    def test_format_with_ampersand(self):
+        """Test filename with & in artist name."""
+        result = organize_music._parse_filename_to_artist_title(Path("Central Cee & 21 Savage - GBP.mp3"))
+        self.assertEqual(result, ("Central Cee & 21 Savage", "GBP"))
+
+    def test_no_dash_separator(self):
+        """Test filename without ' - ' separator."""
+        result = organize_music._parse_filename_to_artist_title(Path("BAND4BAND (Kurt Joseph Bootleg).mp3"))
+        self.assertEqual(result, (None, None))
+
+    def test_multiple_dashes(self):
+        """Test filename with multiple dashes - only first split."""
+        result = organize_music._parse_filename_to_artist_title(Path("R cord - Deep State Dub - 01 Cold Phase.mp3"))
+        self.assertEqual(result, ("R cord", "Deep State Dub - 01 Cold Phase"))
+
+    def test_empty_stem(self):
+        """Test file with empty stem."""
+        result = organize_music._parse_filename_to_artist_title(Path(".mp3"))
+        self.assertEqual(result, (None, None))
+
+
+class TestNormalizeForComparison(unittest.TestCase):
+    """Tests for _normalize_for_comparison function."""
+
+    def test_basic_normalization(self):
+        """Test basic lowercase and whitespace normalization."""
+        result = organize_music._normalize_for_comparison("Test Artist")
+        self.assertEqual(result, "test artist")
+
+    def test_removes_punctuation(self):
+        """Test that punctuation is removed."""
+        result = organize_music._normalize_for_comparison("Artist & Co.")
+        self.assertEqual(result, "artist co")
+
+    def test_removes_parentheses(self):
+        """Test that parentheses are removed."""
+        result = organize_music._normalize_for_comparison("Title (Remix)")
+        self.assertEqual(result, "title remix")
+
+    def test_collapses_whitespace(self):
+        """Test that multiple spaces are collapsed."""
+        result = organize_music._normalize_for_comparison("  Title   With   Spaces  ")
+        self.assertEqual(result, "title with spaces")
+
+    def test_empty_string(self):
+        """Test empty string normalization."""
+        result = organize_music._normalize_for_comparison("")
+        self.assertEqual(result, "")
+
+
+class TestCheckMetadataMismatch(unittest.TestCase):
+    """Tests for _check_metadata_mismatch function."""
+
+    def test_no_mismatch(self):
+        """Test when metadata matches filename."""
+        result = organize_music._check_metadata_mismatch(
+            Path("Test Artist - Test Title.mp3"),
+            "Test Artist",
+            "Test Title"
+        )
+        self.assertFalse(result['artist_mismatch'])
+        self.assertFalse(result['title_mismatch'])
+        self.assertEqual(result['artist_similarity'], 1.0)
+        self.assertEqual(result['title_similarity'], 1.0)
+
+    def test_artist_mismatch(self):
+        """Test when artist metadata differs from filename."""
+        result = organize_music._check_metadata_mismatch(
+            Path("Central Cee 21 Savage - GBP.mp3"),
+            "Jadah Arrington",
+            "GBP"
+        )
+        self.assertTrue(result['artist_mismatch'])
+        self.assertFalse(result['title_mismatch'])
+        self.assertLess(result['artist_similarity'], 0.6)
+
+    def test_title_mismatch(self):
+        """Test when title metadata differs from filename."""
+        result = organize_music._check_metadata_mismatch(
+            Path("R cord - Deep State Dub - 01 Cold Phase.mp3"),
+            "R cord",
+            "Cold Phase"
+        )
+        self.assertFalse(result['artist_mismatch'])
+        self.assertTrue(result['title_mismatch'])
+        self.assertEqual(result['artist_similarity'], 1.0)
+        self.assertLess(result['title_similarity'], 0.6)
+
+    def test_both_mismatch(self):
+        """Test when both artist and title differ."""
+        result = organize_music._check_metadata_mismatch(
+            Path("Drake - Hotline Bling.mp3"),
+            "Taylor Swift",
+            "Shake It Off"
+        )
+        self.assertTrue(result['artist_mismatch'])
+        self.assertTrue(result['title_mismatch'])
+
+    def test_no_filename_artist(self):
+        """Test when filename can't be parsed (no ' - ' separator)."""
+        result = organize_music._check_metadata_mismatch(
+            Path("BAND4BAND.mp3"),
+            "Some Artist",
+            "Some Title"
+        )
+        self.assertIsNone(result['filename_artist'])
+        self.assertIsNone(result['filename_title'])
+        self.assertFalse(result['artist_mismatch'])
+        self.assertFalse(result['title_mismatch'])
+
+    def test_metadata_none(self):
+        """Test when metadata is None."""
+        result = organize_music._check_metadata_mismatch(
+            Path("Artist - Title.mp3"),
+            None,
+            "Title"
+        )
+        self.assertFalse(result['artist_mismatch'])
+        self.assertFalse(result['title_mismatch'])
+        self.assertIsNone(result['artist_similarity'])
+
+    def test_custom_threshold(self):
+        """Test with custom similarity threshold."""
+        result = organize_music._check_metadata_mismatch(
+            Path("Test Artist - Test Title.mp3"),
+            "Test Artist",
+            "Test Title (Remix)",
+            threshold=0.9
+        )
+        self.assertTrue(result['title_mismatch'])
+
+    def test_similar_artist_no_mismatch(self):
+        """Test that similar artists pass the threshold."""
+        result = organize_music._check_metadata_mismatch(
+            Path("Central Cee & 21 Savage - GBP.mp3"),
+            "Central Cee 21 Savage",
+            "GBP"
+        )
+        self.assertFalse(result['artist_mismatch'])
+        self.assertEqual(result['filename_artist'], "Central Cee & 21 Savage")
+        self.assertEqual(result['filename_title'], "GBP")
+
+    def test_returns_filename_parsed_values(self):
+        """Test that parsed filename values are returned."""
+        result = organize_music._check_metadata_mismatch(
+            Path("My Artist - My Song (Extended Mix).mp3"),
+            "My Artist",
+            "My Song"
+        )
+        self.assertEqual(result['filename_artist'], "My Artist")
+        self.assertEqual(result['filename_title'], "My Song (Extended Mix)")
+
+
+class TestProcessFileMetadataMismatch(unittest.TestCase):
+    """Tests for process_file with metadata mismatch scenarios."""
+
+    def setUp(self):
+        """Clear caches before each test."""
+        organize_music._genre_cache.clear()
+        organize_music._bandcamp_cache.clear()
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
+    def test_mismatch_detected_and_reported(
+        self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
+        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
+    ):
+        """Test that mismatch is detected and included in result."""
+        mock_extract.return_value = {
+            'artist': 'Jadah Arrington', 'title': 'Vinyl Message', 'album': None, 'genre': None,
+            'date': None, 'label': None, 'Label': None, 'TPUB': None,
+            'publisher': None, 'track': None
+        }
+        mock_itunes.return_value = {
+            'label': 'Test Label', 'genre': 'House', 'album': None,
+            'year': None, 'track_number': None, 'artist': None, 'title': None
+        }
+        mock_label_metadata.return_value = None
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "House"
+        mock_determine_dest.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_exists.return_value = False
+        mock_failure_reason.return_value = "lookup_failed"
+
+        result = organize_music.process_file(
+            Path("Central Cee 21 Savage - GBP (Jay Phoenix Remix).mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
+            dry_run=True
+        )
+
+        self.assertIsNotNone(result['metadata_mismatch'])
+        self.assertTrue(result['metadata_mismatch']['artist_mismatch'])
+        self.assertTrue(result['metadata_mismatch']['title_mismatch'])
+        self.assertEqual(result['metadata_mismatch']['filename_artist'], "Central Cee 21 Savage")
+        self.assertEqual(result['metadata_mismatch']['filename_title'], "GBP (Jay Phoenix Remix)")
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
+    def test_no_mismatch_when_matching(
+        self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
+        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
+    ):
+        """Test that no mismatch is reported when metadata matches filename."""
+        mock_extract.return_value = {
+            'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+            'date': None, 'label': None, 'Label': None, 'TPUB': None,
+            'publisher': None, 'track': None
+        }
+        mock_itunes.return_value = {
+            'label': 'Test Label', 'genre': 'House', 'album': None,
+            'year': None, 'track_number': None, 'artist': None, 'title': None
+        }
+        mock_label_metadata.return_value = None
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "House"
+        mock_determine_dest.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_exists.return_value = False
+        mock_failure_reason.return_value = "lookup_failed"
+
+        result = organize_music.process_file(
+            Path("Test Artist - Test Title.mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
+            dry_run=True
+        )
+
+        self.assertIsNone(result['metadata_mismatch'])
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.lookup_label_online')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.determine_destination')
+    @patch('organize_music.determine_failure_reason')
+    @patch('pathlib.Path.exists')
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
+    def test_uses_filename_for_lookup_on_mismatch(
+        self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
+        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
+    ):
+        """Test that filename artist/title is used for online lookups when mismatch detected."""
+        mock_extract.return_value = {
+            'artist': 'Jadah Arrington', 'title': 'Vinyl Message', 'album': None, 'genre': None,
+            'date': None, 'label': None, 'Label': None, 'TPUB': None,
+            'publisher': None, 'track': None
+        }
+        mock_itunes.return_value = {
+            'label': 'Test Label', 'genre': 'House', 'album': None,
+            'year': None, 'track_number': None, 'artist': None, 'title': None
+        }
+        mock_label_metadata.return_value = None
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "House"
+        mock_determine_dest.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_exists.return_value = False
+        mock_failure_reason.return_value = "lookup_failed"
+
+        organize_music.process_file(
+            Path("Central Cee 21 Savage - GBP (Jay Phoenix Remix).mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
+            dry_run=True
+        )
+
+        mock_itunes.assert_called_once()
+        call_args = mock_itunes.call_args[0]
+        self.assertEqual(call_args[0], "Central Cee 21 Savage")
+        self.assertEqual(call_args[1], "GBP (Jay Phoenix Remix)")
+
+
 if __name__ == '__main__':
     unittest.main()

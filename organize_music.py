@@ -983,6 +983,81 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
     return "lookup_failed"
 
 
+def _parse_filename_to_artist_title(file_path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse an audio filename into artist and title components.
+
+    Expected format: "Artist - Title.ext" or "Artist Title.ext"
+    Returns (artist, title) or (None, None) if parsing fails.
+    """
+    stem = file_path.stem.strip()
+    if not stem:
+        return (None, None)
+
+    if ' - ' in stem:
+        parts = stem.split(' - ', 1)
+        return (parts[0].strip(), parts[1].strip())
+
+    return (None, None)
+
+
+def _normalize_for_comparison(text: str) -> str:
+    """Normalize text for fuzzy comparison: lowercase, strip punctuation/whitespace."""
+    text = text.lower().strip()
+    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
+
+def _check_metadata_mismatch(
+    file_path: Path,
+    meta_artist: Optional[str],
+    meta_title: Optional[str],
+    threshold: float = 0.6
+) -> Dict[str, Optional[str]]:
+    """
+    Compare metadata artist/title against what's parsed from the filename.
+
+    Returns dict with keys:
+        - filename_artist: Artist parsed from filename (or None)
+        - filename_title: Title parsed from filename (or None)
+        - artist_mismatch: True if metadata artist differs significantly from filename artist
+        - title_mismatch: True if metadata title differs significantly from filename title
+        - artist_similarity: Similarity score for artist (0-1)
+        - title_similarity: Similarity score for title (0-1)
+    """
+    result = {
+        'filename_artist': None,
+        'filename_title': None,
+        'artist_mismatch': False,
+        'title_mismatch': False,
+        'artist_similarity': None,
+        'title_similarity': None,
+    }
+
+    filename_artist, filename_title = _parse_filename_to_artist_title(file_path)
+    result['filename_artist'] = filename_artist
+    result['filename_title'] = filename_title
+
+    if meta_artist and filename_artist:
+        norm_meta = _normalize_for_comparison(meta_artist)
+        norm_file = _normalize_for_comparison(filename_artist)
+        score = SequenceMatcher(None, norm_meta, norm_file).ratio()
+        result['artist_similarity'] = round(score, 2)
+        if score < threshold:
+            result['artist_mismatch'] = True
+
+    if meta_title and filename_title:
+        norm_meta = _normalize_for_comparison(meta_title)
+        norm_file = _normalize_for_comparison(filename_title)
+        score = SequenceMatcher(None, norm_meta, norm_file).ratio()
+        result['title_similarity'] = round(score, 2)
+        if score < threshold:
+            result['title_mismatch'] = True
+
+    return result
+
+
 def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_metadata: bool = False) -> Dict:
     """
     Process a single audio file.
@@ -1003,7 +1078,8 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
         'destination': None,
         'action': None,
         'reason': None,
-        'enriched_tags': []
+        'enriched_tags': [],
+        'metadata_mismatch': None,
     }
 
     try:
@@ -1022,11 +1098,39 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
             title = re.sub(r'\s*-\s*remix\s*$', '', title, flags=re.IGNORECASE).strip()
             title = re.sub(r'\s*-\s*edit\s*$', '', title, re.IGNORECASE).strip()
 
+        # Check for metadata vs filename mismatch
+        mismatch_info = _check_metadata_mismatch(file_path, artist, title)
+        has_mismatch = mismatch_info['artist_mismatch'] or mismatch_info['title_mismatch']
+        if has_mismatch:
+            result['metadata_mismatch'] = mismatch_info
+            logger.warning(
+                f"MISMATCH: {file_path.name} - "
+                f"metadata artist='{artist}' vs filename artist='{mismatch_info['filename_artist']}' "
+                f"(similarity={mismatch_info['artist_similarity']}), "
+                f"metadata title='{title}' vs filename title='{mismatch_info['filename_title']}' "
+                f"(similarity={mismatch_info['title_similarity']})"
+            )
+
         if not artist or not title:
             missing_field = 'artist' if not artist else 'title' if not title else 'both'
             result['reason'] = f'missing_metadata_{missing_field}'
             result['action'] = 'leave'
             return result
+
+        # If mismatch detected, try to use filename as fallback for online lookup
+        lookup_artist = artist
+        lookup_title = title
+        if has_mismatch:
+            if mismatch_info['filename_artist'] and mismatch_info['filename_title']:
+                logger.info(f"Using filename artist/title for online lookup: '{mismatch_info['filename_artist']}' - '{mismatch_info['filename_title']}'")
+                lookup_artist = mismatch_info['filename_artist']
+                lookup_title = mismatch_info['filename_title']
+            elif mismatch_info['filename_artist']:
+                logger.info(f"Using filename artist for online lookup: '{mismatch_info['filename_artist']}'")
+                lookup_artist = mismatch_info['filename_artist']
+            elif mismatch_info['filename_title']:
+                logger.info(f"Using filename title for online lookup: '{mismatch_info['filename_title']}'")
+                lookup_title = mismatch_info['filename_title']
 
         result['artist'] = artist
         result['title'] = title
@@ -1058,7 +1162,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
         # Step 4: Single iTunes lookup if any online data needed
         itunes_data = {}
         if need_label_online or need_genre_online or need_additional_online:
-            itunes_data = _lookup_itunes_all_metadata(artist, title)
+            itunes_data = _lookup_itunes_all_metadata(lookup_artist, lookup_title)
 
         # Step 5: Determine final label
         final_label = label_from_metadata
@@ -1067,7 +1171,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
 
         # Also try Bandcamp for label if iTunes didn't find it
         if final_label is None and need_label_online:
-            _, bandcamp_label = get_genre_from_bandcamp(artist, title)
+            _, bandcamp_label = get_genre_from_bandcamp(lookup_artist, lookup_title)
             if bandcamp_label:
                 final_label = bandcamp_label
 
@@ -1088,7 +1192,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
                 if _write_metadata_tag(file_path, 'genre', final_genre):
                     enriched_tags.append('genre')
             elif final_genre is None and need_genre_online:
-                final_genre = get_genre_online(artist, title)
+                final_genre = get_genre_online(lookup_artist, lookup_title)
 
             result['genre'] = final_genre
             dest_dir = label_dest
@@ -1101,7 +1205,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
                     final_genre = _normalize_genre(itunes_genre)
 
             if final_genre is None and need_genre_online:
-                final_genre = get_genre_online(artist, title)
+                final_genre = get_genre_online(lookup_artist, lookup_title)
 
             result['genre'] = final_genre
 
@@ -1122,7 +1226,7 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
                         'track_number': itunes_data.get('track_number'),
                     }
                 else:
-                    additional_metadata = get_additional_metadata_online(artist, title)
+                    additional_metadata = get_additional_metadata_online(lookup_artist, lookup_title)
 
             if final_label and not label_from_metadata and 'label' not in enriched_tags:
                 label_tag = config.get('label_source_tag', 'label')

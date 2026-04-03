@@ -41,7 +41,13 @@ If the target file already exists, the file is left in place and logged.
     - Attempt to read `artist` and `title` tags from file using `ffprobe` (with timeout).
     - Attempt to read `label` tag from file using `ffprobe` (with timeout), either from a specific tag if configured or from common label tags.
     - If artist or title tag is missing or unreadable → leave file, log as `missing_metadata_<field>`.
-3. **Online Lookup**:
+3. **Metadata Mismatch Detection**:
+    - Parse filename into artist and title (format: `Artist - Title.ext`).
+    - Compare metadata artist/title against filename-parsed values using fuzzy matching (Levenshtein similarity).
+    - If similarity falls below threshold (default 0.6) → flag as mismatch, log warning with similarity scores.
+    - When mismatch detected → use filename artist/title for online lookups instead of wrong metadata.
+    - Mismatch details included in result JSON under `metadata_mismatch` field.
+4. **Online Lookup**:
     - Query iTunes Search API: `https://itunes.apple.com/search?term=<artist>+<title>&limit=1` for genre.
     - If iTunes fails or returns no genre, fallback to MusicBrainz API:
          * Search for recording by artist and title.
