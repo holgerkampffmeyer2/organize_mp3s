@@ -20,6 +20,41 @@ import urllib.parse
 import urllib.request
 
 
+def _extract_all_metadata(file_path: Path) -> Dict[str, Optional[str]]:
+    """
+    Extract all metadata tags from audio file in a single ffprobe call.
+
+    Args:
+        file_path: Path to audio file
+
+    Returns:
+        Dict with keys: artist, title, album, genre, date, label, Label, TPUB, publisher, track
+    """
+    result = {
+        'artist': None, 'title': None, 'album': None, 'genre': None,
+        'date': None, 'label': None, 'Label': None, 'TPUB': None,
+        'publisher': None, 'track': None
+    }
+
+    try:
+        proc = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format_tags',
+             '-of', 'json', str(file_path)],
+            capture_output=True, text=True, timeout=10
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            data = json.loads(proc.stdout)
+            tags = data.get('format', {}).get('tags', {})
+            for key in result:
+                val = tags.get(key)
+                if val and val.strip():
+                    result[key] = val.strip()
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    return result
+
+
 def _extract_metadata_tag(file_path: Path, tag: str) -> Optional[str]:
     """
     Extract a specific tag from audio file metadata.
@@ -139,7 +174,29 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
     Returns:
         Label string if found, None otherwise
     """
-    # Try iTunes first
+    itunes_data = _lookup_itunes_all_metadata(artist, title)
+    if itunes_data.get('label'):
+        return itunes_data['label']
+    
+    _, bandcamp_label = get_genre_from_bandcamp(artist, title)
+    if bandcamp_label:
+        return bandcamp_label
+    
+    return None
+
+
+def _lookup_itunes_all_metadata(artist: str, title: str) -> Dict[str, Optional[str]]:
+    """
+    Single iTunes lookup returning all available metadata.
+    
+    Returns dict with keys: label, genre, album, year, track_number, artist, title
+    """
+    result = {
+        'label': None, 'genre': None, 'album': None,
+        'year': None, 'track_number': None,
+        'artist': None, 'title': None
+    }
+    
     try:
         query = urllib.parse.quote(f"{artist} {title}")
         url = f"https://itunes.apple.com/search?term={query}&entity=musicTrack&attribute=songTerm&limit=5"
@@ -149,7 +206,8 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
                 for track in data['results'][:3]:
                     label = track.get('label')
                     if label and label.strip():
-                        return label.strip()
+                        result['label'] = label.strip()
+                        break
                     elif 'trackId' in track:
                         track_id = track['trackId']
                         detail_url = f"https://itunes.apple.com/lookup?id={track_id}"
@@ -158,47 +216,35 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
                             if detail_data['resultCount'] > 0:
                                 detail_label = detail_data['results'][0].get('label')
                                 if detail_label and detail_label.strip():
-                                    return detail_label.strip()
+                                    result['label'] = detail_label.strip()
+                                    break
+                
+                first = data['results'][0]
+                result['genre'] = first.get('primaryGenreName')
+                result['album'] = first.get('collectionName')
+                result['track_number'] = first.get('trackNumber')
+                release_date = first.get('releaseDate')
+                if release_date:
+                    result['year'] = release_date[:4] if len(release_date) >= 4 else None
+                result['artist'] = first.get('artistName')
+                result['title'] = first.get('trackName')
     except Exception:
         pass
     
-    # Fallback to Bandcamp
-    _, bandcamp_label = get_genre_from_bandcamp(artist, title)
-    if bandcamp_label:
-        return bandcamp_label
-    
-    return None
+    return result
 
 
 def get_additional_metadata_online(artist: str, title: str) -> Dict[str, Optional[str]]:
     """
     Lookup additional metadata (album, year, track_number) from online services.
-    
-    Args:
-        artist: Artist name
-        title: Track title
-        
-    Returns:
-        Dictionary with keys: album, year, track_number
+    Uses the unified iTunes lookup to avoid redundant API calls.
     """
-    result = {'album': None, 'year': None, 'track_number': None}
-    
-    try:
-        query = urllib.parse.quote(f"{artist} {title}")
-        url = f"https://itunes.apple.com/search?term={query}&entity=musicTrack&attribute=songTerm&limit=5"
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            if data['resultCount'] > 0:
-                track = data['results'][0]
-                result['album'] = track.get('collectionName')
-                result['track_number'] = track.get('trackNumber')
-                release_date = track.get('releaseDate')
-                if release_date:
-                    result['year'] = release_date[:4] if len(release_date) >= 4 else None
-    except Exception:
-        pass
-    
-    return result
+    itunes_data = _lookup_itunes_all_metadata(artist, title)
+    return {
+        'album': itunes_data.get('album'),
+        'year': itunes_data.get('year'),
+        'track_number': itunes_data.get('track_number'),
+    }
 
 
 def find_label_destination(label: str, label_to_dest: Dict[str, str]) -> Optional[str]:
@@ -242,17 +288,7 @@ def get_genre_from_metadata(file_path: Path) -> Optional[str]:
     Returns:
         Genre string if found, None otherwise
     """
-    try:
-        result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-show_entries', 'format_tags=genre', 
-             '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-        pass
-    return None
+    return _extract_metadata_tag(file_path, 'genre')
 
 
 # Cache for genre lookups to avoid repeated API calls
@@ -266,31 +302,28 @@ def _is_electronic_genre(genre: str) -> bool:
     
     genre_lower = genre.lower().strip()
     
-    # Electronic music genres and subgenres
     electronic_keywords = {
         'electronic', 'techno', 'house', 'trance', 'drum and bass', 'drum n bass', 
         'drum & bass', 'jungle', 'dubstep', 'electronica', 'ambient', 'industrial',
         'edm', 'dance', 'garage', 'breakbeat', 'hardcore', 'hard house', 'progressive',
         'minimal', 'deep house', 'tech house', 'acid house', 'hard techno', 'hard trance',
         'gabber', 'happy hardcore', 'uk garage', '2step', 'breaks', 'electro', 'synthpop',
-        'idm', 'intelligent dance music', 'chiptune', 'glitch', 'idm', 'braindance',
-        'hardstyle', 'hardcore techno', 'gabber', 'power noise', 'noisecore', 'dark ambient',
-        'vrtechno', 'hard dance', 'nu skool breaks', 'funky breaks', 'breaks', 'bassline',
-        'uk funky', 'future garage', 'post dubstep', 'future bass', 'trap', 'downtempo',
-        'chillout', 'lounge', 'nu jazz', 'electro swing', 'electroclash', 'new rave',
-        'bleep', 'bmore club', 'baltimore club', 'ghetto house', 'juke', 'footwork',
-        'seapunk', 'vaporwave', 'cloud rap', 'witch house', 'salem', 'drag'
+        'idm', 'intelligent dance music', 'chiptune', 'glitch', 'hardstyle', 'hardcore techno',
+        'power noise', 'noisecore', 'dark ambient', 'vrtechno', 'hard dance', 
+        'nu skool breaks', 'funky breaks', 'bassline', 'uk funky', 'future garage', 
+        'post dubstep', 'future bass', 'trap', 'downtempo', 'chillout', 'lounge', 
+        'nu jazz', 'electro swing', 'electroclash', 'new rave', 'bleep', 'bmore club', 
+        'baltimore club', 'ghetto house', 'juke', 'footwork', 'seapunk', 'vaporwave', 
+        'cloud rap', 'witch house', 'salem', 'drag'
     }
     
-    # Check if any electronic keyword is in the genre
     for keyword in electronic_keywords:
         if keyword in genre_lower:
             return True
     
-    # Also check for common electronic music label indicators
     label_indicators = ['records', 'music', 'sound', 'audio', 'trax', 'beats', 'sounds']
     for indicator in label_indicators:
-        if indicator in genre_lower and len(genre_lower) < 20:  # Short genre names with these indicators
+        if indicator in genre_lower and len(genre_lower) < 20:
             return True
             
     return False
@@ -581,7 +614,6 @@ def _normalize_genre(genre: str) -> str:
     
     genre = genre.strip()
     
-    # Common normalizations
     normalizations = {
         'drum and bass': 'DRUM N BASS',
         'drum & bass': 'DRUM N BASS',
@@ -595,9 +627,7 @@ def _normalize_genre(genre: str) -> str:
         if key in genre_lower:
             genre = genre.lower().replace(key, value)
     
-    # If we didn't apply any normalization, apply standard title case
     if genre.lower() == genre.strip().lower() and genre == genre.strip():
-        # Check if any normalization was applied by seeing if genre changed from lower
         applied_normalization = False
         for key in normalizations.keys():
             if key in genre_lower:
@@ -612,76 +642,26 @@ def _normalize_genre(genre: str) -> str:
 def get_genre_online(artist: str, title: str) -> Optional[str]:
     """
     Lookup genre via online services with improved accuracy for electronic music.
-    
-    Args:
-        artist: Artist name
-        title: Track title
-        
-    Returns:
-        Genre string if found, None otherwise
+    Uses unified iTunes lookup to avoid redundant API calls.
     """
-    # Create cache key
     cache_key = f"{artist.lower()}:{title.lower()}"
     if cache_key in _genre_cache:
         return _genre_cache[cache_key]
     
-    # Try iTunes first with improved parameters
-    try:
-        query = urllib.parse.quote(f"{artist} {title}")
-        url = f"https://itunes.apple.com/search?term={query}&entity=musicTrack&attribute=songTerm&limit=10"
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read().decode())
-            if data['resultCount'] > 0:
-                # Check multiple results for best genre match
-                electronic_genres = []
-                for track in data['results'][:5]:  # Check top 5 results
-                    genre = track.get('primaryGenreName')
-                    if genre and _is_electronic_genre(genre):
-                        electronic_genres.append(_normalize_genre(genre))
-                
-            # If we found electronic genres, return the most common one or first one
-            if electronic_genres:
-                # Return the first electronic genre (could be enhanced to vote)
-                best_genre = electronic_genres[0]
-                _genre_cache[cache_key] = best_genre
-                return best_genre
-            # If no electronic genres found, return the first genre we found (for testing purposes)
-            # In a real implementation for electronic music, we might want to return None here
-            # but for the tests to pass, we'll return the first genre
-            if data['results']:
-                first_genre = data['results'][0].get('primaryGenreName')
-                if first_genre:
-                    normalized_genre = _normalize_genre(first_genre)
-                    _genre_cache[cache_key] = normalized_genre
-                    return normalized_genre
-    except Exception:
-        pass
+    itunes_data = _lookup_itunes_all_metadata(artist, title)
+    itunes_genre = itunes_data.get('genre')
+    if itunes_genre:
+        normalized = _normalize_genre(itunes_genre)
+        if _is_electronic_genre(itunes_genre):
+            _genre_cache[cache_key] = normalized
+            return normalized
     
-    # Try Bandcamp (excellent for electronic music genres)
-    bandcamp_genre, bandcamp_label = get_genre_from_bandcamp(artist, title)
+    bandcamp_genre, _ = get_genre_from_bandcamp(artist, title)
     if bandcamp_genre:
         _genre_cache[cache_key] = bandcamp_genre
         return bandcamp_genre
     
-    # Try Discogs (good for electronic music)
     try:
-        query = urllib.parse.quote(f"{artist} {title}")
-        url = f"https://api.discogs.com/database/search?q={query}&type=release&per_page=5"
-        request = urllib.request.Request(
-            url,
-            headers={
-                'User-Agent': 'MP3Organizer/1.0',
-                'Authorization': 'Discogs token=YOUR_TOKEN_HERE'  # Would need token in real implementation
-            }
-        )
-        # Note: In a real implementation, we would use Discogs API here
-        # For now, we'll skip to next method since we don't have a token
-    except Exception:
-        pass
-    
-    # Fallback to MusicBrainz with improved genre extraction
-    try:
-        # Search for recording
         query = urllib.parse.quote(f'artist:"{artist}" AND recording:"{title}"')
         url = f"https://musicbrainz.org/ws/2/recording/?query={query}&fmt=json&limit=5"
         request = urllib.request.Request(
@@ -691,10 +671,8 @@ def get_genre_online(artist: str, title: str) -> Optional[str]:
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
             if data['recordings']:
-                # Check multiple recordings
                 for recording in data['recordings'][:3]:
                     recording_id = recording['id']
-                    # Get release groups for this recording
                     rg_url = f"https://musicbrainz.org/ws/2/release-group/?recording={recording_id}&fmt=json"
                     rg_request = urllib.request.Request(
                         rg_url,
@@ -703,7 +681,6 @@ def get_genre_online(artist: str, title: str) -> Optional[str]:
                     with urllib.request.urlopen(rg_request, timeout=10) as rg_response:
                         rg_data = json.loads(rg_response.read().decode())
                         if rg_data['release-groups']:
-                            # Get first release group's tags, prioritizing genre-like tags
                             rg_id = rg_data['release-groups'][0]['id']
                             tag_url = f"https://musicbrainz.org/ws/2/release-group/{rg_id}?inc=tags&fmt=json"
                             tag_request = urllib.request.Request(
@@ -713,33 +690,33 @@ def get_genre_online(artist: str, title: str) -> Optional[str]:
                             with urllib.request.urlopen(tag_request, timeout=10) as tag_response:
                                 tag_data = json.loads(tag_response.read().decode())
                                 if 'tags' in tag_data['release-group'] and tag_data['release-group']['tags']:
-                                 # Look for electronic music tags first
-                                     genre_candidates = []
-                                     for tag in tag_data['release-group']['tags']:
-                                         tag_name = tag['name'].strip()
-                                         if _is_electronic_genre(tag_name):
-                                             genre_candidates.append((tag['count'], _normalize_genre(tag_name)))
-                                     
-                                     # If we found electronic genres, use the one with highest count
-                                     if genre_candidates:
-                                         genre_candidates.sort(reverse=True)  # Sort by count descending
-                                         best_genre = genre_candidates[0][1]
-                                         _genre_cache[cache_key] = best_genre
-                                         return best_genre
-                                     # Otherwise, fall back to any tag with decent count
-                                     elif tag_data['release-group']['tags']:
-                                         # Sort by count if available, otherwise just take the first tag
-                                         try:
-                                             tag_data['release-group']['tags'].sort(key=lambda x: x.get('count', 0), reverse=True)
-                                         except Exception:
-                                             pass  # Keep original order if sorting fails
-                                         best_genre = _normalize_genre(tag_data['release-group']['tags'][0]['name'])
-                                         _genre_cache[cache_key] = best_genre
-                                         return best_genre
+                                    genre_candidates = []
+                                    for tag in tag_data['release-group']['tags']:
+                                        tag_name = tag['name'].strip()
+                                        if _is_electronic_genre(tag_name):
+                                            genre_candidates.append((tag['count'], _normalize_genre(tag_name)))
+                                    
+                                    if genre_candidates:
+                                        genre_candidates.sort(reverse=True)
+                                        best_genre = genre_candidates[0][1]
+                                        _genre_cache[cache_key] = best_genre
+                                        return best_genre
+                                    elif tag_data['release-group']['tags']:
+                                        try:
+                                            tag_data['release-group']['tags'].sort(key=lambda x: x.get('count', 0), reverse=True)
+                                        except Exception:
+                                            pass
+                                        best_genre = _normalize_genre(tag_data['release-group']['tags'][0]['name'])
+                                        _genre_cache[cache_key] = best_genre
+                                        return best_genre
     except Exception:
         pass
     
-    # Cache negative result to avoid repeated failed lookups
+    if itunes_genre:
+        normalized = _normalize_genre(itunes_genre)
+        _genre_cache[cache_key] = normalized
+        return normalized
+    
     _genre_cache[cache_key] = None
     return None
 
@@ -1009,15 +986,12 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
 def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_metadata: bool = False) -> Dict:
     """
     Process a single audio file.
-    
-    Args:
-        file_path: Path to audio file
-        config: Configuration dictionary
-        dry_run: If True, only simulate the operation
-        enrich_metadata: If True, write missing metadata from online sources to files
-        
-    Returns:
-        Dictionary with processing results
+
+    Optimized flow:
+    1. Single ffprobe call for all metadata
+    2. Single iTunes lookup for all online metadata (label, genre, album, year, track)
+    3. Early-exit when label already maps to destination (skip genre lookup)
+    4. Only fallback to Bandcamp/MusicBrainz when iTunes fails
     """
     result = {
         'file_path': str(file_path.absolute()),
@@ -1028,163 +1002,170 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
         'label': None,
         'destination': None,
         'action': None,
-        'reason': None
+        'reason': None,
+        'enriched_tags': []
     }
-    
+
     try:
-        # Extract metadata
-        artist = None
-        title = None
-        
-        # Get artist
-        try:
-            artist_result = subprocess.run(
-                ['ffprobe', '-v', 'error', '-show_entries', 'format_tags=artist', 
-                 '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)],
-                capture_output=True, text=True, timeout=5
-            )
-            if artist_result.returncode == 0 and artist_result.stdout.strip():
-                artist = artist_result.stdout.strip()
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-            pass
-        
-        # Get title
-        try:
-            title_result = subprocess.run(
-                ['ffprobe', '-v', 'error', '-show_entries', 'format_tags=title', 
-                 '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)],
-                capture_output=True, text=True, timeout=5
-            )
-            if title_result.returncode == 0 and title_result.stdout.strip():
-                title = title_result.stdout.strip()
-                
-                # Clean title: Remove artist prefix if present (e.g., "Artist - Title" -> "Title")
-                # This is common in metadata and helps with online lookups
-                if artist and title.lower().startswith(artist.lower() + ' - '):
-                    title = title[len(artist) + 3:].strip()
-                
-                # Also remove common remix/version suffixes for better online lookups
-                # e.g., "Song Name (Remix)" -> "Song Name", "Song Name (Radio Edit)" -> "Song Name"
-                title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
-                title = re.sub(r'\s*-\s*remix\s*$', '', title, flags=re.IGNORECASE).strip()
-                title = re.sub(r'\s*-\s*edit\s*$', '', title, re.IGNORECASE).strip()
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
-            pass
-        
-        # If artist or title missing, log and return
+        # Step 1: Extract ALL metadata in a single ffprobe call
+        all_meta = _extract_all_metadata(file_path)
+        artist = all_meta.get('artist')
+        title = all_meta.get('title')
+
+        # Clean title: Remove artist prefix if present
+        if artist and title and title.lower().startswith(artist.lower() + ' - '):
+            title = title[len(artist) + 3:].strip()
+
+        # Clean title: Remove remix/version suffixes for better online lookups
+        if title:
+            title = re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+            title = re.sub(r'\s*-\s*remix\s*$', '', title, flags=re.IGNORECASE).strip()
+            title = re.sub(r'\s*-\s*edit\s*$', '', title, re.IGNORECASE).strip()
+
         if not artist or not title:
             missing_field = 'artist' if not artist else 'title' if not title else 'both'
             result['reason'] = f'missing_metadata_{missing_field}'
             result['action'] = 'leave'
             return result
-        
+
         result['artist'] = artist
         result['title'] = title
-        
-        # Get label from metadata
+
+        # Step 2: Get label from metadata
         label_from_metadata = get_label_from_metadata(file_path, config.get('label_source_tag'))
-        
-        # Get label from online lookup if needed
-        label_from_online = None
         label_to_dest = config.get('label_map', {})
-        if label_from_metadata is None and label_to_dest:
-            label_from_online = lookup_label_online(artist, title)
-        
-        # Determine final label
-        final_label = label_from_metadata if label_from_metadata is not None else label_from_online
-        result['label'] = final_label
-        
-        # Get genre from metadata
-        genre_from_metadata = get_genre_from_metadata(file_path)
-        
-        # Get genre from online lookup if needed
-        # Try online genre lookup when:
-        # 1. No genre in metadata, OR
-        # 2. Genre from metadata is not mapped (e.g., "Hip-Hop/Rap" not in config)
-        genre_from_online = None
         genre_to_dest = config.get('genre_map', {})
-        
-        # Check if metadata genre is mapped
+
+        # Step 3: Determine if we need online lookups
+        need_label_online = label_from_metadata is None and bool(label_to_dest)
+
+        # Check if metadata genre is already mapped (avoids unnecessary online lookup)
+        genre_from_metadata = all_meta.get('genre')
         metadata_genre_mapped = False
         if genre_from_metadata:
             mapped = find_genre_destination(genre_from_metadata, genre_to_dest)
             metadata_genre_mapped = mapped is not None
-        
-        if genre_from_metadata is None or not metadata_genre_mapped:
-            genre_from_online = get_genre_online(artist, title)
-        
-        # Determine final genre
-        final_genre = genre_from_metadata if genre_from_metadata is not None else genre_from_online
-        result['genre'] = final_genre
-        
-        # Enrich metadata from online sources if enabled (CLI or config) - skip in dry-run
-        enriched_tags = []
+
+        need_genre_online = genre_from_metadata is None or not metadata_genre_mapped
+
+        # Check if we need additional metadata (album, year) for enrich
         enrich_enabled = (enrich_metadata or config.get('enrich_metadata', False)) and not dry_run
+        album_from_metadata = all_meta.get('album')
+        need_additional_online = enrich_enabled and (
+            album_from_metadata is None or (need_label_online and need_genre_online)
+        )
+
+        # Step 4: Single iTunes lookup if any online data needed
+        itunes_data = {}
+        if need_label_online or need_genre_online or need_additional_online:
+            itunes_data = _lookup_itunes_all_metadata(artist, title)
+
+        # Step 5: Determine final label
+        final_label = label_from_metadata
+        if final_label is None and itunes_data.get('label'):
+            final_label = itunes_data['label']
+
+        # Also try Bandcamp for label if iTunes didn't find it
+        if final_label is None and need_label_online:
+            _, bandcamp_label = get_genre_from_bandcamp(artist, title)
+            if bandcamp_label:
+                final_label = bandcamp_label
+
+        result['label'] = final_label
+
+        # Step 6: Early-exit check - if label maps to destination, skip genre lookup
+        label_dest = None
+        if label_to_dest and final_label:
+            label_dest = find_label_destination(final_label, label_to_dest)
+
+        enriched_tags = []
+        if label_dest is not None:
+            # Label already maps to destination - genre lookup not needed for routing
+            # Only do genre lookup if enrich is enabled and genre missing
+            final_genre = genre_from_metadata
+            if enrich_enabled and final_genre is None and itunes_data.get('genre'):
+                final_genre = _normalize_genre(itunes_data['genre'])
+                if _write_metadata_tag(file_path, 'genre', final_genre):
+                    enriched_tags.append('genre')
+            elif final_genre is None and need_genre_online:
+                final_genre = get_genre_online(artist, title)
+
+            result['genre'] = final_genre
+            dest_dir = label_dest
+        else:
+            # Need genre for destination - do full genre lookup
+            final_genre = genre_from_metadata
+            if final_genre is None and itunes_data.get('genre'):
+                itunes_genre = itunes_data['genre']
+                if _is_electronic_genre(itunes_genre):
+                    final_genre = _normalize_genre(itunes_genre)
+
+            if final_genre is None and need_genre_online:
+                final_genre = get_genre_online(artist, title)
+
+            result['genre'] = final_genre
+
+            # Determine destination via label or genre
+            dest_dir, _, _, _, _ = determine_destination(
+                final_label, final_genre, label_to_dest, genre_to_dest
+            )
+
+        # Step 7: Enrich metadata if enabled
         if enrich_enabled:
-            # Get album from metadata
-            album_from_metadata = _extract_metadata_tag(file_path, 'album')
-            
             # Get additional metadata from online if needed
             additional_metadata = {}
             if album_from_metadata is None or final_label is None or final_genre is None:
-                additional_metadata = get_additional_metadata_online(artist, title)
-            
-            # Enrich: Write label if missing in metadata but found online
-            if final_label and not label_from_metadata:
+                if itunes_data:
+                    additional_metadata = {
+                        'album': itunes_data.get('album'),
+                        'year': itunes_data.get('year'),
+                        'track_number': itunes_data.get('track_number'),
+                    }
+                else:
+                    additional_metadata = get_additional_metadata_online(artist, title)
+
+            if final_label and not label_from_metadata and 'label' not in enriched_tags:
                 label_tag = config.get('label_source_tag', 'label')
                 if _write_metadata_tag(file_path, label_tag, final_label):
                     enriched_tags.append(label_tag)
-            
-            # Enrich: Write genre if missing in metadata but found online
-            if final_genre and not genre_from_metadata:
+
+            if final_genre and not genre_from_metadata and 'genre' not in enriched_tags:
                 if _write_metadata_tag(file_path, 'genre', final_genre):
                     enriched_tags.append('genre')
-            
-            # Enrich: Write album if missing in metadata but found online
+
             if additional_metadata.get('album') and not album_from_metadata:
                 if _write_metadata_tag(file_path, 'album', additional_metadata['album']):
                     enriched_tags.append('album')
-            
-            # Enrich: Write year if missing in metadata but found online
+
             if additional_metadata.get('year'):
-                existing_year = _extract_metadata_tag(file_path, 'date')
+                existing_year = all_meta.get('date')
                 if not existing_year:
                     if _write_metadata_tag(file_path, 'date', additional_metadata['year']):
                         enriched_tags.append('year')
-        
+
         result['enriched_tags'] = enriched_tags
-        
-        # Determine destination
-        genre_to_dest = config.get('genre_map', {})
-        dest_dir, used_label, used_genre, detected_genre, detected_label = determine_destination(
-            final_label, final_genre, label_to_dest, genre_to_dest
-        )
-        
+
+        # Step 8: Move or leave
         result['destination'] = str(dest_dir) if dest_dir else None
-        
+
         if dest_dir is None:
-            # Determine failure reason
             result['reason'] = determine_failure_reason(final_label, label_to_dest, final_genre)
             result['action'] = 'leave'
         else:
-            # Check if target file already exists
             target_path = Path(dest_dir) / file_path.name
             if target_path.exists():
                 result['reason'] = 'target_exists'
                 result['action'] = 'leave'
             else:
-                # Check if move is enabled (config or CLI)
                 move_enabled = not dry_run and config.get('move', True)
                 if move_enabled:
-                    # Create destination directory if it doesn't exist
                     Path(dest_dir).mkdir(parents=True, exist_ok=True)
-                    # Move file
                     file_path.rename(target_path)
                 result['action'] = 'move'
                 result['destination'] = str(target_path.absolute())
-        
+
         return result
-        
+
     except Exception as e:
         result['reason'] = f'processing_error: {str(e)}'
         result['action'] = 'leave'

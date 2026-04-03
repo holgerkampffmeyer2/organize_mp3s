@@ -62,16 +62,17 @@ sudo apt install ffmpeg python3
 
 ## Technical Details
 
-- **Metadata Source**: Artist and title from file metadata (ffprobe); Label from file metadata (ffprobe) or online lookup
-- **Genre/Label Lookup**: iTunes Search API (primary), Bandcamp (fallback), MusicBrainz, Discogs
+- **Metadata Source**: Artist and title from file metadata (single ffprobe call); Label from file metadata or online lookup
+- **Genre/Label Lookup**: iTunes Search API (primary, single unified call), Bandcamp (fallback), MusicBrainz (tags)
 - **Label Lookup**: iTunes Search API (when metadata missing, with track ID lookup), Bandcamp fallback
 - **Sorting Priority**: Label mapping first, then Genre mapping as fallback
+- **Early-Exit Optimization**: When label already maps to destination, genre lookup is skipped (saves API calls)
 - **Subgenre Hierarchy**: Subgenres automatically map to parent genres (e.g., "Electro House" → "House")
 - **Fuzzy Genre Matching**: Configurable threshold (default 0.8) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
 - **Metadata Enrichment**: Optional feature to write missing metadata (label, genre, album, year) from online sources back to audio files (via CLI `--enrich-metadata` or config `enrich_metadata: true`)
 - **Move Control**: Configurable `move: true|false` option to enable/disable file movement (default: true). When `move: false`, the script determines destinations but doesn't move files.
 - **Execution Order**: 1) dry-run check, 2) metadata enrichment (if enabled), 3) file movement (if enabled)
-- **Timeouts**: 5 seconds for ffprobe, 10 seconds for HTTP requests
+- **Timeouts**: 10 seconds for ffprobe (single call), 10 seconds for HTTP requests
 - **Output**: Files moved to genre-specific or label-specific folders as defined in config.json
 - **Logging**: JSON log of non-processed files (normal) or audit log (dry-run)
 - **Caching**: In-memory cache for online lookups to avoid repeated API calls

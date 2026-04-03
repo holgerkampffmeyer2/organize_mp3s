@@ -182,7 +182,8 @@ class TestGetGenreOnline(unittest.TestCase):
     @patch('urllib.request.urlopen')
     def test_genre_found_musicbrainz(self, mock_urlopen):
         """Test when genre is found via MusicBrainz (iTunes and Bandcamp fail)."""
-        # Mock the responses (context managers)
+        organize_music._genre_cache.clear()
+        organize_music._bandcamp_cache.clear()
         itunes_resp = MagicMock()
         itunes_resp.__enter__.return_value.read.return_value = json.dumps({
             'resultCount': 0
@@ -203,13 +204,13 @@ class TestGetGenreOnline(unittest.TestCase):
         
         mb_tag_resp = MagicMock()
         mb_tag_resp.__enter__.return_value.read.return_value = json.dumps({
-            'release-group': {'tags': [{'name': 'Test Genre'}]}
+            'release-group': {'tags': [{'name': 'electronic', 'count': 5}]}
         }).encode()
 
         mock_urlopen.side_effect = [itunes_resp, bandcamp_resp, mb_search_resp, mb_rg_resp, mb_tag_resp]
 
         result = organize_music.get_genre_online("Test Artist", "Test Title")
-        self.assertEqual(result, "Test Genre")
+        self.assertEqual(result, "Electronic")
         self.assertEqual(mock_urlopen.call_count, 5)
 
     @patch('urllib.request.urlopen')
@@ -647,20 +648,13 @@ class TestProcessFileEdgeCases(unittest.TestCase):
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_missing_artist(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+    @patch('organize_music._extract_all_metadata')
+    def test_missing_artist(self, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
                             mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
         """Test when artist is missing from metadata."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = ""  # No artist
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': None, 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
 
         result = organize_music.process_file(
             Path("test.mp3"),
@@ -678,20 +672,13 @@ class TestProcessFileEdgeCases(unittest.TestCase):
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_missing_title(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+    @patch('organize_music._extract_all_metadata')
+    def test_missing_title(self, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
                           mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
         """Test when title is missing from metadata."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = ""  # No title
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': None, 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
 
         result = organize_music.process_file(
             Path("test.mp3"),
@@ -709,20 +696,15 @@ class TestProcessFileEdgeCases(unittest.TestCase):
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_config_without_label_map(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+    @patch('organize_music._extract_all_metadata')
+    def test_config_without_label_map(self, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
                                      mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
         """Test when config does not contain label_map."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_determine_dest.return_value = (None, False, False, None, None)
+        mock_failure_reason.return_value = "lookup_failed"
 
         result = organize_music.process_file(
             Path("test.mp3"),
@@ -740,20 +722,15 @@ class TestProcessFileEdgeCases(unittest.TestCase):
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_config_without_genre_map(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+    @patch('organize_music._extract_all_metadata')
+    def test_config_without_genre_map(self, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
                                       mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
         """Test when config does not contain genre_map."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_determine_dest.return_value = (None, False, False, None, None)
+        mock_failure_reason.return_value = "lookup_failed"
 
         result = organize_music.process_file(
             Path("test.mp3"),
@@ -764,10 +741,10 @@ class TestProcessFileEdgeCases(unittest.TestCase):
         # Should not error, just continue without genre mapping
         self.assertIn(result['action'], ['move', 'leave'])
 
-    @patch('subprocess.run')
-    def test_processing_exception(self, mock_run):
+    @patch('organize_music._extract_all_metadata')
+    def test_processing_exception(self, mock_extract):
         """Test when an exception occurs during processing."""
-        mock_run.side_effect = Exception("Unexpected error")
+        mock_extract.side_effect = Exception("Unexpected error")
 
         result = organize_music.process_file(
             Path("test.mp3"),
@@ -786,21 +763,13 @@ class TestProcessFileEdgeCases(unittest.TestCase):
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_label_from_metadata_used(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
+    @patch('organize_music._extract_all_metadata')
+    def test_label_from_metadata_used(self, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
                                       mock_find_genre, mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata):
         """Test when label is found in metadata."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
-
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': 'Test Genre',
+                                      'date': None, 'label': 'Test Label', 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
         mock_label_metadata.return_value = "Test Label"
         mock_label_online.return_value = None  # Should not be called
         mock_genre_metadata.return_value = "Test Genre"
@@ -919,106 +888,70 @@ class TestProcessFile(unittest.TestCase):
     """Tests for process_file function."""
 
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
     @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_file_processed_successfully(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
-                                         mock_genre_online, mock_genre_metadata, mock_label_online,
-                                         mock_label_metadata):
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
+    def test_file_processed_successfully(self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
+                                          mock_genre_online, mock_genre_metadata, mock_label_metadata):
         """Test when a file is successfully processed (would be moved)."""
-        # Setup mocks for subprocess.run (artist, title, and genre metadata)
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            # Check if this is the artist call
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            # Check if this is the title call
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            # Check for genre metadata
-            elif len(args) > 0 and isinstance(args[0], list) and any('genre' in arg for arg in args[0]):
-                mock_result.stdout = ""  # No genre in metadata
-            else:
-                mock_result.stdout = ""
-            return mock_result
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'Test Genre', 'album': None,
+                                     'year': None, 'track_number': None, 'artist': None, 'title': None}
         
-        mock_subprocess.side_effect = subprocess_side_effect
-        
-        # Setup mocks for other functions
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
         mock_genre_online.return_value = "Test Genre"
         mock_determine_dest.return_value = ("/dest/path", True, False, "Test Genre", "Test Label")
         mock_exists.return_value = False  # Target file does not exist
         mock_failure_reason.return_value = "label_not_mapped"  # Should not be used if dest is found
 
-        # Call the function
         result = organize_music.process_file(
             Path("test.mp3"),
             {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"Test Genre": "/dest/path"}},
             dry_run=True
         )
 
-        # Assertions
         self.assertEqual(result['action'], 'move')
         self.assertEqual(result['destination'], "/dest/path/test.mp3")
         self.assertEqual(result['label'], "Test Label")
         self.assertEqual(result['genre'], "Test Genre")
 
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
     @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
     @patch('organize_music.determine_destination')
     @patch('organize_music.determine_failure_reason')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
-    def test_file_not_moved_due_to_target_exists(self, mock_subprocess, mock_exists, mock_failure_reason, mock_determine_dest,
-                                                 mock_genre_online, mock_genre_metadata, mock_label_online,
-                                                 mock_label_metadata):
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
+    def test_file_not_moved_due_to_target_exists(self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
+                                                  mock_genre_online, mock_genre_metadata, mock_label_metadata):
         """Test when a file is not moved because target already exists."""
-        # Setup mocks for subprocess.run (artist, title, and genre metadata)
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            # Check if this is the artist call
-            if len(args) > 0 and isinstance(args[0], list) and any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            # Check if this is the title call
-            elif len(args) > 0 and isinstance(args[0], list) and any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            # Check for genre metadata
-            elif len(args) > 0 and isinstance(args[0], list) and any('genre' in arg for arg in args[0]):
-                mock_result.stdout = ""  # No genre in metadata
-            else:
-                mock_result.stdout = ""
-            return mock_result
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'Test Genre', 'album': None,
+                                     'year': None, 'track_number': None, 'artist': None, 'title': None}
         
-        mock_subprocess.side_effect = subprocess_side_effect
-        
-        # Setup mocks
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
         mock_genre_online.return_value = "Test Genre"
         mock_determine_dest.return_value = ("/dest/path", True, False, "Test Genre", "Test Label")
         mock_exists.return_value = True  # Target file exists
         mock_failure_reason.return_value = "target_exists"
 
-        # Call the function
         result = organize_music.process_file(
             Path("test.mp3"),
             {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"Test Genre": "/dest/path"}},
             dry_run=True
         )
 
-        # Assertions
         self.assertEqual(result['action'], 'leave')
         self.assertEqual(result['reason'], 'target_exists')
 
@@ -1251,43 +1184,30 @@ class TestGetAdditionalMetadataOnline(unittest.TestCase):
 
 
 class TestProcessFileMetadataEnrichment(unittest.TestCase):
-    """Tests for process_file metadata enrichment functionality."""
+    """Tests for metadata enrichment in process_file."""
 
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
     @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
-    @patch('organize_music.get_additional_metadata_online')
     @patch('organize_music._write_metadata_tag')
-    @patch('organize_music._extract_metadata_tag')
     @patch('organize_music.determine_destination')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
     def test_enrich_metadata_label_and_genre(
-        self, mock_subprocess, mock_exists, mock_determine, mock_extract,
-        mock_write, mock_additional, mock_genre_online, mock_genre_metadata,
-        mock_label_online, mock_label_metadata
+        self, mock_itunes, mock_extract, mock_exists, mock_determine, mock_write,
+        mock_genre_online, mock_genre_metadata, mock_label_metadata
     ):
         """Test enriching label and genre when missing in metadata."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            elif any('album' in arg for arg in args[0]):
-                mock_result.stdout = ""
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'House', 'album': 'Test Album',
+                                     'year': '2024', 'track_number': 1, 'artist': None, 'title': None}
 
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
         mock_genre_online.return_value = "House"
-        mock_additional.return_value = {'album': 'Test Album', 'year': '2024', 'track_number': 1}
-        mock_extract.return_value = None  # No existing album in metadata
         mock_write.return_value = True
         mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
         mock_exists.return_value = False
@@ -1299,7 +1219,114 @@ class TestProcessFileMetadataEnrichment(unittest.TestCase):
             enrich_metadata=True
         )
 
-        self.assertEqual(result['enriched_tags'], ['label', 'genre', 'album', 'year'])
+        self.assertEqual(set(result['enriched_tags']), {'label', 'genre', 'album', 'year'})
+        self.assertEqual(mock_write.call_count, 4)
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music._write_metadata_tag')
+    @patch('organize_music.determine_destination')
+    @patch('pathlib.Path.exists')
+    @patch('organize_music._extract_all_metadata')
+    def test_no_enrichment_when_metadata_exists(
+        self, mock_extract, mock_exists, mock_determine, mock_write,
+        mock_genre_online, mock_genre_metadata, mock_label_metadata
+    ):
+        """Test no enrichment when metadata already exists."""
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': 'Existing Album', 'genre': 'Existing Genre',
+                                      'date': '2020', 'label': 'Existing Label', 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+
+        mock_label_metadata.return_value = "Existing Label"
+        mock_genre_metadata.return_value = "Existing Genre"
+        mock_genre_online.return_value = "Online Genre"
+        mock_determine.return_value = ("/dest/path", True, False, "Existing Genre", "Existing Label")
+        mock_exists.return_value = False
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {"Existing Label": "/dest/path"}, "genre_map": {"Existing Genre": "/dest/path"}, "enrich_metadata": True},
+            dry_run=True,
+            enrich_metadata=True
+        )
+
+        self.assertEqual(result['enriched_tags'], [])
+        mock_write.assert_not_called()
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music._write_metadata_tag')
+    @patch('organize_music.determine_destination')
+    @patch('pathlib.Path.exists')
+    @patch('organize_music._extract_all_metadata')
+    def test_enrichment_disabled_by_default(
+        self, mock_extract, mock_exists, mock_determine, mock_write,
+        mock_genre_online, mock_genre_metadata, mock_label_metadata
+    ):
+        """Test no enrichment when not enabled."""
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+
+        mock_label_metadata.return_value = None
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "House"
+        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_exists.return_value = False
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
+            dry_run=True,
+            enrich_metadata=False  # Disabled via CLI
+        )
+
+        self.assertEqual(result['enriched_tags'], [])
+        mock_write.assert_not_called()
+
+    @patch('organize_music.get_label_from_metadata')
+    @patch('organize_music.get_genre_from_metadata')
+    @patch('organize_music.get_genre_online')
+    @patch('organize_music.get_additional_metadata_online')
+    @patch('organize_music._write_metadata_tag')
+    @patch('organize_music.determine_destination')
+    @patch('pathlib.Path.exists')
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
+    def test_enrichment_enabled_via_config(
+        self, mock_itunes, mock_extract, mock_exists, mock_determine, mock_write,
+        mock_additional, mock_genre_online, mock_genre_metadata,
+        mock_label_metadata
+    ):
+        """Test enrichment enabled via config.json."""
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'House', 'album': 'Test Album',
+                                     'year': '2024', 'track_number': 1, 'artist': None, 'title': None}
+
+        mock_label_metadata.return_value = None
+        mock_genre_metadata.return_value = None
+        mock_genre_online.return_value = "House"
+        mock_additional.return_value = {'album': 'Test Album', 'year': '2024', 'track_number': 1}
+        mock_write.return_value = True
+        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_exists.return_value = False
+
+        result = organize_music.process_file(
+            Path("test.mp3"),
+            {
+                "label_map": {"Test Label": "/dest/path"},
+                "genre_map": {"House": "/dest/path"},
+                "enrich_metadata": True
+            },
+            dry_run=False,
+            enrich_metadata=False  # CLI flag not needed since config enables it
+        )
+
+        self.assertEqual(set(result['enriched_tags']), {'label', 'genre', 'album', 'year'})
         self.assertEqual(mock_write.call_count, 4)
 
     @patch('organize_music.get_label_from_metadata')
@@ -1385,40 +1412,30 @@ class TestProcessFileMetadataEnrichment(unittest.TestCase):
         mock_write.assert_not_called()
 
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
     @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
     @patch('organize_music.get_additional_metadata_online')
     @patch('organize_music._write_metadata_tag')
-    @patch('organize_music._extract_metadata_tag')
     @patch('organize_music.determine_destination')
     @patch('pathlib.Path.exists')
-    @patch('subprocess.run')
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
     def test_enrichment_enabled_via_config(
-        self, mock_subprocess, mock_exists, mock_determine, mock_extract,
-        mock_write, mock_additional, mock_genre_online, mock_genre_metadata,
-        mock_label_online, mock_label_metadata
+        self, mock_itunes, mock_extract, mock_exists, mock_determine, mock_write,
+        mock_additional, mock_genre_online, mock_genre_metadata,
+        mock_label_metadata
     ):
         """Test enrichment enabled via config.json."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            elif any('album' in arg for arg in args[0]):
-                mock_result.stdout = ""
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'House', 'album': 'Test Album',
+                                     'year': '2024', 'track_number': 1, 'artist': None, 'title': None}
 
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
         mock_genre_online.return_value = "House"
         mock_additional.return_value = {'album': 'Test Album', 'year': '2024', 'track_number': 1}
-        mock_extract.return_value = None
         mock_write.return_value = True
         mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
         mock_exists.return_value = False
@@ -1434,7 +1451,8 @@ class TestProcessFileMetadataEnrichment(unittest.TestCase):
             enrich_metadata=False  # CLI param not set, but config enables it
         )
 
-        self.assertEqual(result['enriched_tags'], ['label', 'genre', 'album', 'year'])
+        self.assertEqual(set(result['enriched_tags']), {'label', 'genre', 'album', 'year'})
+        self.assertEqual(mock_write.call_count, 4)
 
 
 class TestMoveConfigOption(unittest.TestCase):
@@ -1448,22 +1466,15 @@ class TestMoveConfigOption(unittest.TestCase):
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.mkdir')
     @patch('pathlib.Path.rename')
-    @patch('subprocess.run')
+    @patch('organize_music._extract_all_metadata')
     def test_move_enabled_by_config_true(
-        self, mock_subprocess, mock_rename, mock_mkdir, mock_exists, mock_determine,
+        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
         mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
     ):
         """Test file is moved when move: true in config."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
         mock_label_metadata.return_value = None
         mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
@@ -1494,22 +1505,15 @@ class TestMoveConfigOption(unittest.TestCase):
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.mkdir')
     @patch('pathlib.Path.rename')
-    @patch('subprocess.run')
+    @patch('organize_music._extract_all_metadata')
     def test_move_disabled_by_config_false(
-        self, mock_subprocess, mock_rename, mock_mkdir, mock_exists, mock_determine,
+        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
         mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
     ):
         """Test file is NOT moved when move: false in config."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
         mock_label_metadata.return_value = None
         mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
@@ -1542,22 +1546,15 @@ class TestMoveConfigOption(unittest.TestCase):
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.mkdir')
     @patch('pathlib.Path.rename')
-    @patch('subprocess.run')
+    @patch('organize_music._extract_all_metadata')
     def test_move_default_is_true(
-        self, mock_subprocess, mock_rename, mock_mkdir, mock_exists, mock_determine,
+        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
         mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
     ):
         """Test move defaults to true when not specified in config."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
         mock_label_metadata.return_value = None
         mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None
@@ -1588,22 +1585,15 @@ class TestMoveConfigOption(unittest.TestCase):
     @patch('pathlib.Path.exists')
     @patch('pathlib.Path.mkdir')
     @patch('pathlib.Path.rename')
-    @patch('subprocess.run')
+    @patch('organize_music._extract_all_metadata')
     def test_dry_run_overrides_move_true(
-        self, mock_subprocess, mock_rename, mock_mkdir, mock_exists, mock_determine,
+        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
         mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
     ):
         """Test dry-run mode overrides move: true in config."""
-        def subprocess_side_effect(*args, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if any('artist' in arg for arg in args[0]):
-                mock_result.stdout = "Test Artist\n"
-            elif any('title' in arg for arg in args[0]):
-                mock_result.stdout = "Test Title\n"
-            return mock_result
-
-        mock_subprocess.side_effect = subprocess_side_effect
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'publisher': None, 'track': None}
         mock_label_metadata.return_value = None
         mock_label_online.return_value = "Test Label"
         mock_genre_metadata.return_value = None

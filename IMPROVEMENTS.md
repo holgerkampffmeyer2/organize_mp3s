@@ -31,5 +31,27 @@
 
 ## Test Coverage
 
-- Total tests: 114
+- Total tests: 132
 - All tests passing
+
+---
+
+## Recent Optimizations (2025-04-03)
+
+### Performance
+- **Single ffprobe call** - replaced 5+ separate calls with one JSON-based extraction
+- **Unified iTunes lookup** - `_lookup_itunes_all_metadata()` returns label, genre, album, year, track in one API call
+- **Early-exit for label mapping** - skips genre lookup when label already maps to destination
+- **Deduplicated enrichment writes** - genre not written twice in early-exit path
+
+### Code Quality
+- **Removed dead Discogs code** - stub without token was never functional
+- **Removed duplicate `get_genre_from_metadata`** - was defined twice
+- **Genre normalization from wav-to-aac-converter** - consistent `_normalize_genre` and `_is_electronic_genre` logic
+
+### API Efficiency
+| Before | After |
+|--------|-------|
+| 5+ ffprobe subprocess calls | 1 ffprobe call (JSON) |
+| 3 separate iTunes API calls | 1 unified iTunes call |
+| Genre lookup always executed | Early-exit when label maps |
