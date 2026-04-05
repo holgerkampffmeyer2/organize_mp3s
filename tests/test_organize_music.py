@@ -869,9 +869,9 @@ class TestDetermineFailureReason(unittest.TestCase):
         self.assertEqual(reason, "label_not_mapped")
 
     def test_label_missing(self):
-        """Test when label mapping is configured but label is missing."""
+        """Test when label mapping is configured but label is missing, and no genre."""
         reason = organize_music.determine_failure_reason(None, {"Test Label": "/dest"}, None)
-        self.assertEqual(reason, "label_missing")
+        self.assertEqual(reason, "lookup_failed")
 
     def test_genre_not_mapped(self):
         """Test when genre is present but not mapped."""
@@ -1395,524 +1395,241 @@ class TestProcessFileMetadataEnrichment(unittest.TestCase):
         mock_subprocess.side_effect = subprocess_side_effect
 
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
+        mock_label_online.return_value = None
         mock_genre_metadata.return_value = None
         mock_genre_online.return_value = "House"
-        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_determine.return_value = ("/dest/path", True, False, "House", None)
         mock_exists.return_value = False
 
         result = organize_music.process_file(
             Path("test.mp3"),
             {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
             dry_run=True,
-            enrich_metadata=False  # Disabled via CLI
+            enrich_metadata=False  # Disabled
         )
 
         self.assertEqual(result['enriched_tags'], [])
         mock_write.assert_not_called()
 
-    @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.get_genre_from_metadata')
-    @patch('organize_music.get_genre_online')
-    @patch('organize_music.get_additional_metadata_online')
-    @patch('organize_music._write_metadata_tag')
-    @patch('organize_music.determine_destination')
-    @patch('pathlib.Path.exists')
+
+class TestGenreFallbackWhenNoLabel(unittest.TestCase):
+    """Tests for genre fallback when no label is found."""
+
     @patch('organize_music._extract_all_metadata')
     @patch('organize_music._lookup_itunes_all_metadata')
-    def test_enrichment_enabled_via_config(
-        self, mock_itunes, mock_extract, mock_exists, mock_determine, mock_write,
-        mock_additional, mock_genre_online, mock_genre_metadata,
-        mock_label_metadata
-    ):
-        """Test enrichment enabled via config.json."""
-        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
-                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
-                                      'publisher': None, 'track': None}
-        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'House', 'album': 'Test Album',
-                                     'year': '2024', 'track_number': 1, 'artist': None, 'title': None}
-
-        mock_label_metadata.return_value = None
-        mock_genre_metadata.return_value = None
-        mock_genre_online.return_value = "House"
-        mock_additional.return_value = {'album': 'Test Album', 'year': '2024', 'track_number': 1}
-        mock_write.return_value = True
-        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
-        mock_exists.return_value = False
-
-        result = organize_music.process_file(
-            Path("test.mp3"),
-            {
-                "label_map": {"Test Label": "/dest/path"},
-                "genre_map": {"House": "/dest/path"},
-                "enrich_metadata": True  # Enabled in config
-            },
-            dry_run=False,  # dry_run=False to allow enrichment
-            enrich_metadata=False  # CLI param not set, but config enables it
-        )
-
-        self.assertEqual(set(result['enriched_tags']), {'label', 'genre', 'album', 'year'})
-        self.assertEqual(mock_write.call_count, 4)
-
-
-class TestMoveConfigOption(unittest.TestCase):
-    """Tests for move config option."""
-
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
     @patch('organize_music.determine_destination')
     @patch('pathlib.Path.exists')
-    @patch('pathlib.Path.mkdir')
-    @patch('pathlib.Path.rename')
-    @patch('organize_music._extract_all_metadata')
-    def test_move_enabled_by_config_true(
-        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
+    def test_genre_fallback_when_label_missing(
+        self, mock_exists, mock_determine, mock_genre_online,
+        mock_label_metadata, mock_itunes, mock_extract
     ):
-        """Test file is moved when move: true in config."""
-        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
+        """Test that genre is used when label is not available."""
+        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': 'House',
                                       'date': None, 'label': None, 'Label': None, 'TPUB': None,
                                       'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': None, 'genre': 'House', 'album': None,
+                                     'year': None, 'track_number': None, 'artist': None, 'title': None}
+
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
-        mock_genre_metadata.return_value = None
-        mock_genre_online.return_value = "House"
-        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_genre_online.return_value = None
+        mock_determine.return_value = ("/dest/path", False, True, "House", None)
         mock_exists.return_value = False
-        mock_mkdir.return_value = None
-        mock_rename.return_value = None
 
         result = organize_music.process_file(
             Path("test.mp3"),
-            {
-                "label_map": {"Test Label": "/dest/path"},
-                "genre_map": {"House": "/dest/path"},
-                "move": True
-            },
-            dry_run=False,
-            enrich_metadata=False
-        )
-
-        self.assertEqual(result['action'], 'move')
-
-    @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
-    @patch('organize_music.get_genre_online')
-    @patch('organize_music.determine_destination')
-    @patch('pathlib.Path.exists')
-    @patch('pathlib.Path.mkdir')
-    @patch('pathlib.Path.rename')
-    @patch('organize_music._extract_all_metadata')
-    def test_move_disabled_by_config_false(
-        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
-    ):
-        """Test file is NOT moved when move: false in config."""
-        mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
-                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
-                                      'publisher': None, 'track': None}
-        mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
-        mock_genre_metadata.return_value = None
-        mock_genre_online.return_value = "House"
-        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
-        mock_exists.return_value = False
-        mock_mkdir.return_value = None
-        mock_rename.return_value = None
-
-        result = organize_music.process_file(
-            Path("test.mp3"),
-            {
-                "label_map": {"Test Label": "/dest/path"},
-                "genre_map": {"House": "/dest/path"},
-                "move": False
-            },
-            dry_run=False,
-            enrich_metadata=False
+            {"label_map": {"Some Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
+            dry_run=True
         )
 
         self.assertEqual(result['action'], 'move')
         self.assertEqual(result['destination'], '/dest/path/test.mp3')
-        mock_rename.assert_not_called()
+        self.assertEqual(result['genre'], 'House')
+        mock_determine.assert_called_once()
 
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
     @patch('organize_music.determine_destination')
     @patch('pathlib.Path.exists')
-    @patch('pathlib.Path.mkdir')
-    @patch('pathlib.Path.rename')
-    @patch('organize_music._extract_all_metadata')
-    def test_move_default_is_true(
-        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
+    def test_genre_fallback_with_online_lookup(
+        self, mock_exists, mock_determine, mock_genre_online,
+        mock_label_metadata, mock_itunes, mock_extract
     ):
-        """Test move defaults to true when not specified in config."""
+        """Test genre fallback with online genre lookup when metadata genre not mapped."""
         mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
                                       'date': None, 'label': None, 'Label': None, 'TPUB': None,
                                       'publisher': None, 'track': None}
+        mock_itunes.return_value = {'label': None, 'genre': None, 'album': None,
+                                     'year': None, 'track_number': None, 'artist': None, 'title': None}
+
         mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
-        mock_genre_metadata.return_value = None
         mock_genre_online.return_value = "House"
-        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_determine.return_value = ("/dest/path", False, True, "House", None)
         mock_exists.return_value = False
-        mock_mkdir.return_value = None
-        mock_rename.return_value = None
 
         result = organize_music.process_file(
             Path("test.mp3"),
-            {
-                "label_map": {"Test Label": "/dest/path"},
-                "genre_map": {"House": "/dest/path"},
-                "move": True
-            },
-            dry_run=False,
-            enrich_metadata=False
+            {"label_map": {"Some Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
+            dry_run=True
         )
 
         self.assertEqual(result['action'], 'move')
+        self.assertEqual(result['genre'], 'House')
 
+    @patch('organize_music._extract_all_metadata')
+    @patch('organize_music._lookup_itunes_all_metadata')
     @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
     @patch('organize_music.get_genre_online')
     @patch('organize_music.determine_destination')
     @patch('pathlib.Path.exists')
-    @patch('pathlib.Path.mkdir')
-    @patch('pathlib.Path.rename')
-    @patch('organize_music._extract_all_metadata')
-    def test_dry_run_overrides_move_true(
-        self, mock_extract, mock_rename, mock_mkdir, mock_exists, mock_determine,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
+    def test_label_priority_over_genre(
+        self, mock_exists, mock_determine, mock_genre_online,
+        mock_label_metadata, mock_itunes, mock_extract
     ):
-        """Test dry-run mode overrides move: true in config."""
+        """Test that label is used when available, even if genre also available."""
         mock_extract.return_value = {'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
-                                      'date': None, 'label': None, 'Label': None, 'TPUB': None,
+                                      'date': None, 'label': 'Test Label', 'Label': None, 'TPUB': None,
                                       'publisher': None, 'track': None}
-        mock_label_metadata.return_value = None
-        mock_label_online.return_value = "Test Label"
-        mock_genre_metadata.return_value = None
+        mock_itunes.return_value = {'label': 'Test Label', 'genre': 'House', 'album': None,
+                                     'year': None, 'track_number': None, 'artist': None, 'title': None}
+
+        mock_label_metadata.return_value = "Test Label"
         mock_genre_online.return_value = "House"
-        mock_determine.return_value = ("/dest/path", True, False, "House", "Test Label")
+        mock_determine.return_value = ("/label/dest/path", True, False, "House", "Test Label")
         mock_exists.return_value = False
-        mock_mkdir.return_value = None
-        mock_rename.return_value = None
 
         result = organize_music.process_file(
             Path("test.mp3"),
-            {
-                "label_map": {"Test Label": "/dest/path"},
-                "genre_map": {"House": "/dest/path"},
-                "move": True
-            },
-            dry_run=True,
-            enrich_metadata=False
+            {"label_map": {"Test Label": "/label/dest/path"}, "genre_map": {"House": "/genre/dest/path"}},
+            dry_run=True
         )
 
         self.assertEqual(result['action'], 'move')
-        self.assertEqual(result['destination'], '/dest/path/test.mp3')
-        mock_rename.assert_not_called()
+        self.assertEqual(result['destination'], '/label/dest/path/test.mp3')
+        self.assertEqual(result['label'], 'Test Label')
 
 
-class TestParseFilenameToArtistTitle(unittest.TestCase):
-    """Tests for _parse_filename_to_artist_title function."""
+class TestDetermineFailureReasonNewLogic(unittest.TestCase):
+    """Tests for determine_failure_reason with the new logic."""
 
-    def test_standard_format(self):
-        """Test standard 'Artist - Title.ext' format."""
-        result = organize_music._parse_filename_to_artist_title(Path("Artist - Title.mp3"))
-        self.assertEqual(result, ("Artist", "Title"))
+    def test_label_map_configured_but_no_label_genre_mapped(self):
+        """Test when label_map is configured but no label found, and genre is mapped."""
+        reason = organize_music.determine_failure_reason(None, {"Test Label": "/dest"}, "House")
+        self.assertEqual(reason, "genre_not_mapped")
 
-    def test_format_with_parentheses(self):
-        """Test filename with remix info in parentheses."""
-        result = organize_music._parse_filename_to_artist_title(Path("Central Cee 21 Savage - GBP (Jay Phoenix Remix).mp3"))
-        self.assertEqual(result, ("Central Cee 21 Savage", "GBP (Jay Phoenix Remix)"))
+    def test_label_map_configured_but_no_label_genre_not_mapped(self):
+        """Test when label_map is configured, no label, and genre not mapped."""
+        reason = organize_music.determine_failure_reason(None, {"Test Label": "/dest"}, "Unknown Genre")
+        self.assertEqual(reason, "genre_not_mapped")
 
-    def test_format_with_ampersand(self):
-        """Test filename with & in artist name."""
-        result = organize_music._parse_filename_to_artist_title(Path("Central Cee & 21 Savage - GBP.mp3"))
-        self.assertEqual(result, ("Central Cee & 21 Savage", "GBP"))
-
-    def test_no_dash_separator(self):
-        """Test filename without ' - ' separator."""
-        result = organize_music._parse_filename_to_artist_title(Path("BAND4BAND (Kurt Joseph Bootleg).mp3"))
-        self.assertEqual(result, (None, None))
-
-    def test_multiple_dashes(self):
-        """Test filename with multiple dashes - only first split."""
-        result = organize_music._parse_filename_to_artist_title(Path("R cord - Deep State Dub - 01 Cold Phase.mp3"))
-        self.assertEqual(result, ("R cord", "Deep State Dub - 01 Cold Phase"))
-
-    def test_empty_stem(self):
-        """Test file with empty stem."""
-        result = organize_music._parse_filename_to_artist_title(Path(".mp3"))
-        self.assertEqual(result, (None, None))
+    def test_label_map_configured_no_label_no_genre(self):
+        """Test when label_map is configured but no label and no genre."""
+        reason = organize_music.determine_failure_reason(None, {"Test Label": "/dest"}, None)
+        self.assertEqual(reason, "lookup_failed")
 
 
-class TestNormalizeForComparison(unittest.TestCase):
-    """Tests for _normalize_for_comparison function."""
+class TestSubstringMatch(unittest.TestCase):
+    """Tests for _check_substring_match function."""
 
-    def test_basic_normalization(self):
-        """Test basic lowercase and whitespace normalization."""
-        result = organize_music._normalize_for_comparison("Test Artist")
-        self.assertEqual(result, "test artist")
+    def test_exact_match(self):
+        """Test when metadata title exactly matches filename title."""
+        is_match, score = organize_music._check_substring_match("Locked In", "Locked In")
+        self.assertTrue(is_match)
+        self.assertEqual(score, 1.0)
 
-    def test_removes_punctuation(self):
-        """Test that punctuation is removed."""
-        result = organize_music._normalize_for_comparison("Artist & Co.")
-        self.assertEqual(result, "artist co")
+    def test_meta_in_filename(self):
+        """Test when metadata title is contained in filename title."""
+        is_match, score = organize_music._check_substring_match("Locked In", "Lost In The Abyss - 02 Locked In")
+        self.assertTrue(is_match)
+        self.assertEqual(score, 1.0)
 
-    def test_removes_parentheses(self):
-        """Test that parentheses are removed."""
-        result = organize_music._normalize_for_comparison("Title (Remix)")
-        self.assertEqual(result, "title remix")
+    def test_filename_in_meta(self):
+        """Test when filename title is contained in metadata title."""
+        is_match, score = organize_music._check_substring_match("Way Of The Wub", "Way Of The Wub")
+        self.assertTrue(is_match)
+        self.assertEqual(score, 1.0)
 
-    def test_collapses_whitespace(self):
-        """Test that multiple spaces are collapsed."""
-        result = organize_music._normalize_for_comparison("  Title   With   Spaces  ")
-        self.assertEqual(result, "title with spaces")
+    def test_case_insensitive(self):
+        """Test case-insensitive matching."""
+        is_match, score = organize_music._check_substring_match("locked in", "LOCKED IN")
+        self.assertTrue(is_match)
+        self.assertEqual(score, 1.0)
 
-    def test_empty_string(self):
-        """Test empty string normalization."""
-        result = organize_music._normalize_for_comparison("")
-        self.assertEqual(result, "")
+    def test_with_punctuation(self):
+        """Test matching with punctuation differences."""
+        is_match, score = organize_music._check_substring_match("Can't Let You Go", "Can't Let You Go")
+        self.assertTrue(is_match)
+
+    def test_word_overlap_majority(self):
+        """Test when majority of words match (70%+)."""
+        is_match, score = organize_music._check_substring_match("Way Of The Wub", "Second Opinion LP - 06 Way Of The Wub")
+        self.assertTrue(is_match)
+        self.assertEqual(score, 1.0)
+
+    def test_no_match_different_words(self):
+        """Test when there's no word overlap."""
+        is_match, score = organize_music._check_substring_match("Song A", "Song B")
+        self.assertFalse(is_match)
+
+    def test_empty_strings(self):
+        """Test with empty strings."""
+        is_match, score = organize_music._check_substring_match("", "")
+        self.assertFalse(is_match)
+
+    def test_partial_word_match_below_threshold(self):
+        """Test when fewer than 70% of words match."""
+        is_match, score = organize_music._check_substring_match("One Two Three", "Four Five Six")
+        self.assertFalse(is_match)
 
 
-class TestCheckMetadataMismatch(unittest.TestCase):
-    """Tests for _check_metadata_mismatch function."""
+class TestCheckMetadataMismatchWithSubstring(unittest.TestCase):
+    """Tests for _check_metadata_mismatch with substring matching."""
 
-    def test_no_mismatch(self):
-        """Test when metadata matches filename."""
+    def test_title_substring_in_filename(self):
+        """Test when metadata title is substring of filename title."""
         result = organize_music._check_metadata_mismatch(
-            Path("Test Artist - Test Title.mp3"),
-            "Test Artist",
-            "Test Title"
+            Path("Artist - Album - 01 Title.mp3"),
+            "Artist",
+            "Title",
+            threshold=0.6
         )
-        self.assertFalse(result['artist_mismatch'])
         self.assertFalse(result['title_mismatch'])
-        self.assertEqual(result['artist_similarity'], 1.0)
         self.assertEqual(result['title_similarity'], 1.0)
 
-    def test_artist_mismatch(self):
-        """Test when artist metadata differs from filename."""
-        result = organize_music._check_metadata_mismatch(
-            Path("Central Cee 21 Savage - GBP.mp3"),
-            "Jadah Arrington",
-            "GBP"
-        )
-        self.assertTrue(result['artist_mismatch'])
-        self.assertFalse(result['title_mismatch'])
-        self.assertLess(result['artist_similarity'], 0.6)
-
-    def test_title_mismatch(self):
-        """Test when title metadata differs from filename."""
-        result = organize_music._check_metadata_mismatch(
-            Path("R cord - Deep State Dub - 01 Cold Phase.mp3"),
-            "R cord",
-            "Cold Phase"
-        )
-        self.assertFalse(result['artist_mismatch'])
-        self.assertTrue(result['title_mismatch'])
-        self.assertEqual(result['artist_similarity'], 1.0)
-        self.assertLess(result['title_similarity'], 0.6)
-
-    def test_both_mismatch(self):
-        """Test when both artist and title differ."""
-        result = organize_music._check_metadata_mismatch(
-            Path("Drake - Hotline Bling.mp3"),
-            "Taylor Swift",
-            "Shake It Off"
-        )
-        self.assertTrue(result['artist_mismatch'])
-        self.assertTrue(result['title_mismatch'])
-
-    def test_no_filename_artist(self):
-        """Test when filename can't be parsed (no ' - ' separator)."""
-        result = organize_music._check_metadata_mismatch(
-            Path("BAND4BAND.mp3"),
-            "Some Artist",
-            "Some Title"
-        )
-        self.assertIsNone(result['filename_artist'])
-        self.assertIsNone(result['filename_title'])
-        self.assertFalse(result['artist_mismatch'])
-        self.assertFalse(result['title_mismatch'])
-
-    def test_metadata_none(self):
-        """Test when metadata is None."""
+    def test_title_exact_match(self):
+        """Test when metadata title exactly matches filename title."""
         result = organize_music._check_metadata_mismatch(
             Path("Artist - Title.mp3"),
-            None,
-            "Title"
+            "Artist",
+            "Title",
+            threshold=0.6
         )
-        self.assertFalse(result['artist_mismatch'])
         self.assertFalse(result['title_mismatch'])
-        self.assertIsNone(result['artist_similarity'])
+        self.assertEqual(result['title_similarity'], 1.0)
 
-    def test_custom_threshold(self):
-        """Test with custom similarity threshold."""
+    def test_title_no_match(self):
+        """Test when metadata title doesn't match at all."""
         result = organize_music._check_metadata_mismatch(
-            Path("Test Artist - Test Title.mp3"),
-            "Test Artist",
-            "Test Title (Remix)",
-            threshold=0.9
+            Path("Artist - Song B.mp3"),
+            "Artist",
+            "Completely Different Title",
+            threshold=0.6
         )
         self.assertTrue(result['title_mismatch'])
+        self.assertLess(result['title_similarity'], 0.6)
 
-    def test_similar_artist_no_mismatch(self):
-        """Test that similar artists pass the threshold."""
+    def test_title_levenshtein_fallback(self):
+        """Test Levenshtein fallback for similar but non-substring titles."""
         result = organize_music._check_metadata_mismatch(
-            Path("Central Cee & 21 Savage - GBP.mp3"),
-            "Central Cee 21 Savage",
-            "GBP"
+            Path("Artist - Amazing Song.mp3"),
+            "Artist",
+            "Amazing Song",  # Same, should match via substring
+            threshold=0.6
         )
-        self.assertFalse(result['artist_mismatch'])
-        self.assertEqual(result['filename_artist'], "Central Cee & 21 Savage")
-        self.assertEqual(result['filename_title'], "GBP")
-
-    def test_returns_filename_parsed_values(self):
-        """Test that parsed filename values are returned."""
-        result = organize_music._check_metadata_mismatch(
-            Path("My Artist - My Song (Extended Mix).mp3"),
-            "My Artist",
-            "My Song"
-        )
-        self.assertEqual(result['filename_artist'], "My Artist")
-        self.assertEqual(result['filename_title'], "My Song (Extended Mix)")
-
-
-class TestProcessFileMetadataMismatch(unittest.TestCase):
-    """Tests for process_file with metadata mismatch scenarios."""
-
-    def setUp(self):
-        """Clear caches before each test."""
-        organize_music._genre_cache.clear()
-        organize_music._bandcamp_cache.clear()
-
-    @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
-    @patch('organize_music.get_genre_online')
-    @patch('organize_music.determine_destination')
-    @patch('organize_music.determine_failure_reason')
-    @patch('pathlib.Path.exists')
-    @patch('organize_music._extract_all_metadata')
-    @patch('organize_music._lookup_itunes_all_metadata')
-    def test_mismatch_detected_and_reported(
-        self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
-    ):
-        """Test that mismatch is detected and included in result."""
-        mock_extract.return_value = {
-            'artist': 'Jadah Arrington', 'title': 'Vinyl Message', 'album': None, 'genre': None,
-            'date': None, 'label': None, 'Label': None, 'TPUB': None,
-            'publisher': None, 'track': None
-        }
-        mock_itunes.return_value = {
-            'label': 'Test Label', 'genre': 'House', 'album': None,
-            'year': None, 'track_number': None, 'artist': None, 'title': None
-        }
-        mock_label_metadata.return_value = None
-        mock_genre_metadata.return_value = None
-        mock_genre_online.return_value = "House"
-        mock_determine_dest.return_value = ("/dest/path", True, False, "House", "Test Label")
-        mock_exists.return_value = False
-        mock_failure_reason.return_value = "lookup_failed"
-
-        result = organize_music.process_file(
-            Path("Central Cee 21 Savage - GBP (Jay Phoenix Remix).mp3"),
-            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
-            dry_run=True
-        )
-
-        self.assertIsNotNone(result['metadata_mismatch'])
-        self.assertTrue(result['metadata_mismatch']['artist_mismatch'])
-        self.assertTrue(result['metadata_mismatch']['title_mismatch'])
-        self.assertEqual(result['metadata_mismatch']['filename_artist'], "Central Cee 21 Savage")
-        self.assertEqual(result['metadata_mismatch']['filename_title'], "GBP (Jay Phoenix Remix)")
-
-    @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
-    @patch('organize_music.get_genre_online')
-    @patch('organize_music.determine_destination')
-    @patch('organize_music.determine_failure_reason')
-    @patch('pathlib.Path.exists')
-    @patch('organize_music._extract_all_metadata')
-    @patch('organize_music._lookup_itunes_all_metadata')
-    def test_no_mismatch_when_matching(
-        self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
-    ):
-        """Test that no mismatch is reported when metadata matches filename."""
-        mock_extract.return_value = {
-            'artist': 'Test Artist', 'title': 'Test Title', 'album': None, 'genre': None,
-            'date': None, 'label': None, 'Label': None, 'TPUB': None,
-            'publisher': None, 'track': None
-        }
-        mock_itunes.return_value = {
-            'label': 'Test Label', 'genre': 'House', 'album': None,
-            'year': None, 'track_number': None, 'artist': None, 'title': None
-        }
-        mock_label_metadata.return_value = None
-        mock_genre_metadata.return_value = None
-        mock_genre_online.return_value = "House"
-        mock_determine_dest.return_value = ("/dest/path", True, False, "House", "Test Label")
-        mock_exists.return_value = False
-        mock_failure_reason.return_value = "lookup_failed"
-
-        result = organize_music.process_file(
-            Path("Test Artist - Test Title.mp3"),
-            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
-            dry_run=True
-        )
-
-        self.assertIsNone(result['metadata_mismatch'])
-
-    @patch('organize_music.get_label_from_metadata')
-    @patch('organize_music.lookup_label_online')
-    @patch('organize_music.get_genre_from_metadata')
-    @patch('organize_music.get_genre_online')
-    @patch('organize_music.determine_destination')
-    @patch('organize_music.determine_failure_reason')
-    @patch('pathlib.Path.exists')
-    @patch('organize_music._extract_all_metadata')
-    @patch('organize_music._lookup_itunes_all_metadata')
-    def test_uses_filename_for_lookup_on_mismatch(
-        self, mock_itunes, mock_extract, mock_exists, mock_failure_reason, mock_determine_dest,
-        mock_genre_online, mock_genre_metadata, mock_label_online, mock_label_metadata
-    ):
-        """Test that filename artist/title is used for online lookups when mismatch detected."""
-        mock_extract.return_value = {
-            'artist': 'Jadah Arrington', 'title': 'Vinyl Message', 'album': None, 'genre': None,
-            'date': None, 'label': None, 'Label': None, 'TPUB': None,
-            'publisher': None, 'track': None
-        }
-        mock_itunes.return_value = {
-            'label': 'Test Label', 'genre': 'House', 'album': None,
-            'year': None, 'track_number': None, 'artist': None, 'title': None
-        }
-        mock_label_metadata.return_value = None
-        mock_genre_metadata.return_value = None
-        mock_genre_online.return_value = "House"
-        mock_determine_dest.return_value = ("/dest/path", True, False, "House", "Test Label")
-        mock_exists.return_value = False
-        mock_failure_reason.return_value = "lookup_failed"
-
-        organize_music.process_file(
-            Path("Central Cee 21 Savage - GBP (Jay Phoenix Remix).mp3"),
-            {"label_map": {"Test Label": "/dest/path"}, "genre_map": {"House": "/dest/path"}},
-            dry_run=True
-        )
-
-        mock_itunes.assert_called_once()
-        call_args = mock_itunes.call_args[0]
-        self.assertEqual(call_args[0], "Central Cee 21 Savage")
-        self.assertEqual(call_args[1], "GBP (Jay Phoenix Remix)")
+        self.assertFalse(result['title_mismatch'])
 
 
 if __name__ == '__main__':

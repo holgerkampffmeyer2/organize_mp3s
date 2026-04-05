@@ -963,11 +963,14 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
     Logic mirrors determine_destination priority:
     1. If we have a label and label_map configured, and it wasn't mapped -> label_not_mapped
     2. If we have a label but no label_map configured -> label_not_mapped (can't use it)
-    3. If we have no label but label_map exists -> label_missing
+    3. If we have no label but label_map exists -> check genre
+       - If genre is available and mapped -> genre_not_mapped (shouldn't happen with current logic)
+       - If genre is available but not mapped -> genre_not_mapped
+       - If no genre -> lookup_failed
     4. If we have no label and no genre -> lookup_failed
     5. If we have genre but it's not mapped -> genre_not_mapped
     """
-    has_label_map = bool(label_to_dest)  # Check if label_map is configured (even if empty)
+    has_label_map = bool(label_to_dest)
     has_label = label is not None
     
     if has_label and has_label_map:
@@ -975,7 +978,10 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
     elif has_label and not has_label_map:
         return "label_not_mapped"
     elif not has_label and has_label_map:
-        return "label_missing"
+        if genre is not None:
+            return "genre_not_mapped"
+        else:
+            return "lookup_failed"
     elif not has_label and not has_label_map and not genre:
         return "lookup_failed"
     elif genre is not None:
@@ -1007,6 +1013,53 @@ def _normalize_for_comparison(text: str) -> str:
     text = re.sub(r'[^\w\s]', '', text)
     text = re.sub(r'\s+', ' ', text)
     return text
+
+
+def _check_substring_match(meta_title: str, filename_title: str) -> Tuple[bool, float]:
+    """
+    Check if metadata title is contained in filename title (or vice versa).
+    
+    This handles cases like:
+    - meta: "Locked In", filename: "Lost In The Abyss - 02 Locked In" -> match
+    - meta: "Way Of The Wub", filename: "Second Opinion LP - 06 Way Of The Wub" -> match
+    
+    Returns:
+        Tuple of (is_match, similarity_score)
+    """
+    if not meta_title or not filename_title:
+        return (False, 0.0)
+    
+    norm_meta = _normalize_for_comparison(meta_title)
+    norm_filename = _normalize_for_comparison(filename_title)
+    
+    if not norm_meta or not norm_filename:
+        return (False, 0.0)
+    
+    # Direct substring check (meta in filename or filename in meta)
+    if norm_meta in norm_filename or norm_filename in norm_meta:
+        return (True, 1.0)
+    
+    # Check if significant words from metadata are in filename
+    # Tokenize and check overlap
+    meta_words = set(norm_meta.split())
+    filename_words = set(norm_filename.split())
+    
+    if not meta_words or not filename_words:
+        return (False, 0.0)
+    
+    # Check if all meta words are found in filename (order-independent match)
+    if meta_words.issubset(filename_words):
+        return (True, 1.0)
+    
+    # Calculate word overlap ratio
+    common_words = meta_words & filename_words
+    if common_words:
+        overlap_ratio = len(common_words) / len(meta_words)
+        # If >70% of meta words are in filename, consider it a match
+        if overlap_ratio >= 0.7:
+            return (True, overlap_ratio)
+    
+    return (False, 0.0)
 
 
 def _check_metadata_mismatch(
@@ -1048,12 +1101,21 @@ def _check_metadata_mismatch(
             result['artist_mismatch'] = True
 
     if meta_title and filename_title:
-        norm_meta = _normalize_for_comparison(meta_title)
-        norm_file = _normalize_for_comparison(filename_title)
-        score = SequenceMatcher(None, norm_meta, norm_file).ratio()
-        result['title_similarity'] = round(score, 2)
-        if score < threshold:
-            result['title_mismatch'] = True
+        # First check: substring match (primary check for titles with additional context)
+        is_substring_match, substring_score = _check_substring_match(meta_title, filename_title)
+        
+        if is_substring_match:
+            # Substring match found - metadata title is contained in filename title
+            result['title_similarity'] = round(substring_score, 2)
+            result['title_mismatch'] = False
+        else:
+            # Fallback to Levenshtein similarity
+            norm_meta = _normalize_for_comparison(meta_title)
+            norm_file = _normalize_for_comparison(filename_title)
+            score = SequenceMatcher(None, norm_meta, norm_file).ratio()
+            result['title_similarity'] = round(score, 2)
+            if score < threshold:
+                result['title_mismatch'] = True
 
     return result
 
@@ -1143,14 +1205,9 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
         # Step 3: Determine if we need online lookups
         need_label_online = label_from_metadata is None and bool(label_to_dest)
 
-        # Check if metadata genre is already mapped (avoids unnecessary online lookup)
+        # Always need genre lookup for fallback when label is not available
         genre_from_metadata = all_meta.get('genre')
-        metadata_genre_mapped = False
-        if genre_from_metadata:
-            mapped = find_genre_destination(genre_from_metadata, genre_to_dest)
-            metadata_genre_mapped = mapped is not None
-
-        need_genre_online = genre_from_metadata is None or not metadata_genre_mapped
+        need_genre_online = True  # Always do genre lookup for fallback
 
         # Check if we need additional metadata (album, year) for enrich
         enrich_enabled = (enrich_metadata or config.get('enrich_metadata', False)) and not dry_run
@@ -1177,42 +1234,29 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
 
         result['label'] = final_label
 
-        # Step 6: Early-exit check - if label maps to destination, skip genre lookup
-        label_dest = None
-        if label_to_dest and final_label:
-            label_dest = find_label_destination(final_label, label_to_dest)
+        # Step 6: Determine destination - try label first, then genre fallback
+        # Always do genre lookup to enable fallback when label doesn't work
+        final_genre = genre_from_metadata
+        if final_genre is None and itunes_data.get('genre'):
+            itunes_genre = itunes_data['genre']
+            if _is_electronic_genre(itunes_genre):
+                final_genre = _normalize_genre(itunes_genre)
 
+        if final_genre is None and need_genre_online:
+            final_genre = get_genre_online(lookup_artist, lookup_title)
+
+        result['genre'] = final_genre
+
+        # Determine destination: label priority, then genre fallback
+        dest_dir, used_label, used_genre, _, _ = determine_destination(
+            final_label, final_genre, label_to_dest, genre_to_dest
+        )
+
+        # Enrich genre metadata if enabled and genre was found online
         enriched_tags = []
-        if label_dest is not None:
-            # Label already maps to destination - genre lookup not needed for routing
-            # Only do genre lookup if enrich is enabled and genre missing
-            final_genre = genre_from_metadata
-            if enrich_enabled and final_genre is None and itunes_data.get('genre'):
-                final_genre = _normalize_genre(itunes_data['genre'])
-                if _write_metadata_tag(file_path, 'genre', final_genre):
-                    enriched_tags.append('genre')
-            elif final_genre is None and need_genre_online:
-                final_genre = get_genre_online(lookup_artist, lookup_title)
-
-            result['genre'] = final_genre
-            dest_dir = label_dest
-        else:
-            # Need genre for destination - do full genre lookup
-            final_genre = genre_from_metadata
-            if final_genre is None and itunes_data.get('genre'):
-                itunes_genre = itunes_data['genre']
-                if _is_electronic_genre(itunes_genre):
-                    final_genre = _normalize_genre(itunes_genre)
-
-            if final_genre is None and need_genre_online:
-                final_genre = get_genre_online(lookup_artist, lookup_title)
-
-            result['genre'] = final_genre
-
-            # Determine destination via label or genre
-            dest_dir, _, _, _, _ = determine_destination(
-                final_label, final_genre, label_to_dest, genre_to_dest
-            )
+        if enrich_enabled and final_genre and not genre_from_metadata:
+            if _write_metadata_tag(file_path, 'genre', final_genre):
+                enriched_tags.append('genre')
 
         # Step 7: Enrich metadata if enabled
         if enrich_enabled:
