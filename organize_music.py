@@ -174,14 +174,21 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
     Returns:
         Label string if found, None otherwise
     """
+    cache_key = f"{artist.lower()}:{title.lower()}"
+    if cache_key in _label_cache:
+        return _label_cache[cache_key]
+    
     itunes_data = _lookup_itunes_all_metadata(artist, title)
     if itunes_data.get('label'):
+        _label_cache[cache_key] = itunes_data['label']
         return itunes_data['label']
     
     _, bandcamp_label = get_genre_from_bandcamp(artist, title)
     if bandcamp_label:
+        _label_cache[cache_key] = bandcamp_label
         return bandcamp_label
     
+    _label_cache[cache_key] = None
     return None
 
 
@@ -203,21 +210,27 @@ def _lookup_itunes_all_metadata(artist: str, title: str) -> Dict[str, Optional[s
         with urllib.request.urlopen(url, timeout=10) as response:
             data = json.loads(response.read().decode())
             if data['resultCount'] > 0:
+                first_track_id = None
+                
+                # First pass: look for direct label in search results
                 for track in data['results'][:3]:
                     label = track.get('label')
                     if label and label.strip():
                         result['label'] = label.strip()
                         break
-                    elif 'trackId' in track:
-                        track_id = track['trackId']
-                        detail_url = f"https://itunes.apple.com/lookup?id={track_id}"
-                        with urllib.request.urlopen(detail_url, timeout=10) as detail_response:
-                            detail_data = json.loads(detail_response.read().decode())
-                            if detail_data['resultCount'] > 0:
-                                detail_label = detail_data['results'][0].get('label')
-                                if detail_label and detail_label.strip():
-                                    result['label'] = detail_label.strip()
-                                    break
+                    # Remember first track ID for fallback lookup
+                    if first_track_id is None and 'trackId' in track:
+                        first_track_id = track['trackId']
+                
+                # Second pass: if no label found, lookup first track's details (single API call)
+                if not result['label'] and first_track_id:
+                    detail_url = f"https://itunes.apple.com/lookup?id={first_track_id}"
+                    with urllib.request.urlopen(detail_url, timeout=10) as detail_response:
+                        detail_data = json.loads(detail_response.read().decode())
+                        if detail_data['resultCount'] > 0:
+                            detail_label = detail_data['results'][0].get('label')
+                            if detail_label and detail_label.strip():
+                                result['label'] = detail_label.strip()
                 
                 first = data['results'][0]
                 result['genre'] = first.get('primaryGenreName')
@@ -291,8 +304,9 @@ def get_genre_from_metadata(file_path: Path) -> Optional[str]:
     return _extract_metadata_tag(file_path, 'genre')
 
 
-# Cache for genre lookups to avoid repeated API calls
+# Cache for genre/label lookups to avoid repeated API calls
 _genre_cache = {}
+_label_cache = {}
 _bandcamp_cache = {}
 
 def _is_electronic_genre(genre: str) -> bool:
@@ -650,16 +664,18 @@ def get_genre_online(artist: str, title: str) -> Optional[str]:
     
     itunes_data = _lookup_itunes_all_metadata(artist, title)
     itunes_genre = itunes_data.get('genre')
+    
     if itunes_genre:
         normalized = _normalize_genre(itunes_genre)
         if _is_electronic_genre(itunes_genre):
             _genre_cache[cache_key] = normalized
             return normalized
     
-    bandcamp_genre, _ = get_genre_from_bandcamp(artist, title)
-    if bandcamp_genre:
-        _genre_cache[cache_key] = bandcamp_genre
-        return bandcamp_genre
+    if not itunes_genre:
+        bandcamp_genre, _ = get_genre_from_bandcamp(artist, title)
+        if bandcamp_genre:
+            _genre_cache[cache_key] = bandcamp_genre
+            return bandcamp_genre
     
     try:
         query = urllib.parse.quote(f'artist:"{artist}" AND recording:"{title}"')
@@ -961,31 +977,18 @@ def determine_failure_reason(label: Optional[str], label_to_dest: Dict[str, str]
     Determine the reason for failure to find a destination.
     
     Logic mirrors determine_destination priority:
-    1. If we have a label and label_map configured, and it wasn't mapped -> label_not_mapped
-    2. If we have a label but no label_map configured -> label_not_mapped (can't use it)
-    3. If we have no label but label_map exists -> check genre
-       - If genre is available and mapped -> genre_not_mapped (shouldn't happen with current logic)
-       - If genre is available but not mapped -> genre_not_mapped
-       - If no genre -> lookup_failed
-    4. If we have no label and no genre -> lookup_failed
-    5. If we have genre but it's not mapped -> genre_not_mapped
+    1. If we have a label -> label_not_mapped (couldn't map to destination)
+    2. If no label but have genre -> genre_not_mapped (couldn't map to destination)
+    3. If neither label nor genre -> lookup_failed (couldn't find either)
     """
-    has_label_map = bool(label_to_dest)
     has_label = label is not None
     
-    if has_label and has_label_map:
+    if has_label:
         return "label_not_mapped"
-    elif has_label and not has_label_map:
-        return "label_not_mapped"
-    elif not has_label and has_label_map:
-        if genre is not None:
-            return "genre_not_mapped"
-        else:
-            return "lookup_failed"
-    elif not has_label and not has_label_map and not genre:
-        return "lookup_failed"
-    elif genre is not None:
+    
+    if genre is not None:
         return "genre_not_mapped"
+    
     return "lookup_failed"
 
 
@@ -1261,15 +1264,18 @@ def process_file(file_path: Path, config: Dict, dry_run: bool = False, enrich_me
         # Step 7: Enrich metadata if enabled
         if enrich_enabled:
             # Get additional metadata from online if needed
+            # Use existing itunes_data if available, otherwise fetch fresh
             additional_metadata = {}
             if album_from_metadata is None or final_label is None or final_genre is None:
-                if itunes_data:
+                if itunes_data and (itunes_data.get('album') or itunes_data.get('label') or itunes_data.get('genre')):
                     additional_metadata = {
                         'album': itunes_data.get('album'),
                         'year': itunes_data.get('year'),
                         'track_number': itunes_data.get('track_number'),
                     }
-                else:
+                elif not itunes_data:
+                    # itunes_data wasn't fetched in step 4 (no label/genre needed)
+                    # Fetch now for enrichment
                     additional_metadata = get_additional_metadata_online(lookup_artist, lookup_title)
 
             if final_label and not label_from_metadata and 'label' not in enriched_tags:
