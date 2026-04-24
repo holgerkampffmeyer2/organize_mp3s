@@ -49,12 +49,16 @@ If the target file already exists, the file is left in place and logged.
     - Mismatch details included in result JSON under `metadata_mismatch` field.
 4. **Online Lookup**:
     - Query iTunes Search API: `https://itunes.apple.com/search?term=<artist>+<title>&limit=1` for genre.
-    - If iTunes fails or returns no genre, fallback to MusicBrainz API:
+    - If iTunes fails or returns no genre, fallback to Bandcamp search:
+         * Search Bandcamp for artist and title.
+         * Parse genre keywords from Bandcamp HTML/JSON-LD.
+    - If Bandcamp fails or returns no genre, fallback to MusicBrainz API:
          * Search for recording by artist and title.
          * Get the first release-group of that recording and use its first tag as genre.
     - If label not found in metadata and label mapping is configured, query iTunes Search API for label:
          * First search for track by artist and title to get trackId.
          * Then lookup track by trackId to get label field.
+    - If label still not found, fallback to Bandcamp to extract label from track page.
     - If genre lookup fails → leave file, log as `lookup_failed`.
 4. **Label/Genre Normalization & Mapping**:
     - Normalize label/genre to lowercase.

@@ -70,12 +70,12 @@ sudo apt install ffmpeg python3
 - **Sorting Priority**: Label mapping first, then Genre mapping as fallback
 - **Early-Exit Optimization**: When label already maps to destination, genre lookup is skipped (saves API calls)
 - **Subgenre Hierarchy**: Subgenres automatically map to parent genres (e.g., "Electro House" → "House")
-- **Fuzzy Genre Matching**: Configurable threshold (default 0.8) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
+- **Fuzzy Genre Matching**: Configurable threshold (default 0.6) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
 - **Metadata Mismatch Detection**: Compares metadata artist/title against filename using fuzzy matching. When mismatch detected (similarity < 0.6), uses filename values for online lookups instead of wrong metadata. Mismatch details logged with similarity scores and included in result JSON.
 - **Metadata Enrichment**: Optional feature to write missing metadata (label, genre, album, year) from online sources back to audio files (via CLI `--enrich-metadata` or config `enrich_metadata: true`)
 - **Move Control**: Configurable `move: true|false` option to enable/disable file movement (default: true). When `move: false`, the script determines destinations but doesn't move files.
 - **Execution Order**: 1) dry-run check, 2) metadata enrichment (if enabled), 3) file movement (if enabled)
-- **Timeouts**: 10 seconds for ffprobe (single call), 10 seconds for HTTP requests
+- **Timeouts**: 5 seconds for ffprobe (single call), 10 seconds for HTTP requests
 - **Output**: Files moved to genre-specific or label-specific folders as defined in config.json
 - **Logging**: JSON log of non-processed files (normal) or audit log (dry-run)
 - **Caching**: In-memory cache for online lookups to avoid repeated API calls
@@ -113,7 +113,7 @@ Create a `config.json` file in the same directory as the script:
 
 ```
 organize_mp3s/
-├── AGENT.md           # AI agent workflow instructions (this file)
+├── AGENTS.md          # AI agent workflow instructions (this file)
 ├── README.md          # This file
 ├── organize_music.py  # Python organizer script
 ├── config.json        # Genre to folder mapping
@@ -127,7 +127,7 @@ organize_mp3s/
 
 ## For AI Agents
 
-See [AGENT.md](AGENT.md) for complete workflow instructions including:
+See [AGENTS.md](AGENTS.md) for complete workflow instructions including:
 - Pre-flight Check
 - Execution steps
 - Result verification
