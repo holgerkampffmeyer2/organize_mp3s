@@ -2,7 +2,7 @@
 
 ![Illustration](./assets/organize_mp3s.png)
 
-![Test](https://github.com/holgerkampffmeyer2/organize_mp3s/actions/workflows/test.yml/badge.svg)
+![Test](https://github.com/holgerkampffmeyer2/organize_mp3s/actions/workflows/test.yml/badge.svg?branch=main)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://github.com/holgerkampffmeyer2/organize_mp3s)
 [![License](https://img.shields.io/github/license/holgerkampffmeyer2/organize_mp3s)](https://github.com/holgerkampffmeyer2/organize_mp3s)
 
