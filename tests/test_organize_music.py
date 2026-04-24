@@ -2065,8 +2065,7 @@ class TestOrganizeMusicMainFunction(unittest.TestCase):
             mock_resolve.return_value = Path("/test")
             
             with patch('pathlib.Path.exists', return_value=False):
-                with pytest.raises(SystemExit):
-                    organize_music.organize_music("/test")
+                self.assertRaises(SystemExit, organize_music.organize_music, "/test")
 
     def test_config_invalid_json(self):
         """Test when config.json has invalid JSON."""
@@ -2075,8 +2074,7 @@ class TestOrganizeMusicMainFunction(unittest.TestCase):
             
             with patch('pathlib.Path.exists', return_value=True):
                 with patch('builtins.open', mock_open(read_data='invalid json')):
-                    with pytest.raises(SystemExit):
-                        organize_music.organize_music("/test")
+                    self.assertRaises(SystemExit, organize_music.organize_music, "/test")
 
 
 if __name__ == '__main__':
