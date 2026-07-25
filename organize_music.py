@@ -1228,12 +1228,17 @@ def _parse_filename_to_artist_title(file_path: Path) -> Tuple[Optional[str], Opt
     """
     Parse an audio filename into artist and title components.
 
-    Expected format: "Artist - Title.ext" or "Artist Title.ext"
+    Expected format: "Artist - Title.ext"
+    Handles track number prefixes: "01 - Artist - Title", "01. Artist - Title"
     Returns (artist, title) or (None, None) if parsing fails.
     """
     stem = file_path.stem.strip()
     if not stem:
         return (None, None)
+
+    # Strip leading track number prefixes: "01 - ", "01. ", "#123_"
+    stem = re.sub(r'^\d+[\s._-]+', '', stem)
+    stem = re.sub(r'^#\d+[\s._-]+', '', stem)
 
     if ' - ' in stem:
         parts = stem.split(' - ', 1)
