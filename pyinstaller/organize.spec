@@ -10,8 +10,6 @@ before building, or set FFMPEG_PATH env var.
 import os
 from pathlib import Path
 
-block_cipher = None
-
 spec_dir = Path(SPECPATH)
 ffmpeg_path = os.environ.get('FFMPEG_PATH', str(spec_dir / 'ffmpeg'))
 has_ffmpeg = Path(ffmpeg_path).exists()
@@ -31,13 +29,10 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
