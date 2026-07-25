@@ -1641,7 +1641,10 @@ def organize_music(source_dir: str = ".", dry_run: bool = False, enrich_metadata
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Organize MP3/M4A files by genre or label")
+    parser = argparse.ArgumentParser(
+        description="Organize MP3/M4A files by genre or label",
+        epilog="Author: Holger Kampffmeyer (DJ Hulk) — https://holger-kampffmeyer.de"
+    )
     parser.add_argument("source_directory", nargs="?", default=".",
                        help="Directory to scan for audio files (default: current directory)")
     parser.add_argument("--dry-run", "-n", action="store_true",
@@ -1661,7 +1664,10 @@ def main():
     """Entry point for pyproject.toml console_scripts."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Organize MP3/M4A files by genre or label")
+    parser = argparse.ArgumentParser(
+        description="Organize MP3/M4A files by genre or label",
+        epilog="Author: Holger Kampffmeyer (DJ Hulk) — https://holger-kampffmeyer.de"
+    )
     parser.add_argument("source_directory", nargs="?", default=".",
                        help="Directory to scan for audio files (default: current directory)")
     parser.add_argument("--dry-run", "-n", action="store_true",
