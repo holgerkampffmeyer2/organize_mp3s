@@ -215,3 +215,18 @@ python -m pytest tests/test_organize_music.py::TestSoundCloudCalculateMatchConfi
 - Online lookup relies on third-party APIs (SoundCloud, iTunes, Bandcamp, MusicBrainz) which have their own rate limits and availability.
 - SoundCloud requires a client ID from `.env` file (optional but recommended for better matching).
 - Results are cached in-memory to avoid repeated API calls for the same track.
+
+## OpenSpec Feature Development
+
+This project uses OpenSpec for spec-driven development. To define and implement future features:
+
+1. **Create a new change**:
+   ```bash
+   openspec new change "<feature-name>"
+   ```
+2. **Define artifacts**: Fill in `proposal.md`, `design.md`, `tasks.md`, and delta specs under `openspec/changes/<feature-name>/specs/`.
+3. **Apply & Implement**: Implement the feature according to the specs and tasks.
+4. **Archive & Sync**:
+   ```bash
+   openspec archive <feature-name> -y
+   ```
