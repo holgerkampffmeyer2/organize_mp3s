@@ -13,7 +13,9 @@ AI-agent driven MP3/M4A organization with online genre lookup, metadata-based so
 ```bash
 # One-line install (Linux/macOS)
 curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
+```
 
+```bash
 # Or run directly
 python3 organize_music.py [source_directory]
 ```
