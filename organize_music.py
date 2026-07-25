@@ -1601,7 +1601,10 @@ def organize_music(source_dir: str = ".", dry_run: bool = False, enrich_metadata
         
         # Print progress
         if result['action'] == 'move':
-            logger.info(f"MOVED: {audio_file.name} -> {result['destination']}")
+            if dry_run:
+                logger.info(f"WOULD MOVE: {audio_file.name} -> {result['destination']}")
+            else:
+                logger.info(f"MOVED: {audio_file.name} -> {result['destination']}")
         elif result['action'] == 'leave':
             logger.info(f"LEFT:  {audio_file.name} ({result['reason']})")
     
