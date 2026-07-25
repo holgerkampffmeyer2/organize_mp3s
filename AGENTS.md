@@ -7,6 +7,69 @@ If online lookup fails to find a genre or label, the file is left in place and l
 If the genre or label is not mapped in config.json, the file is left in place and logged.
 If the target file already exists, the file is left in place and logged.
 
+## Agent Instructions
+
+When an AI agent encounters this project, it should:
+1. Read this file to understand the organization workflow
+2. Check prerequisites (Pre-flight Check below)
+3. Optionally verify SoundCloud client ID is set up
+4. Execute `organize_music.py` with appropriate arguments
+5. Monitor for errors and handle retries
+6. Verify results and report to user
+
+## Pre-flight Check
+
+Before starting, verify all requirements are met:
+
+```bash
+# Check ffmpeg installation
+ffmpeg -version || echo "ERROR: ffmpeg not installed"
+
+# Check ffprobe installation
+ffprobe -version || echo "ERROR: ffprobe not installed"
+
+# Check Python installation
+python3 --version || echo "ERROR: python3 not installed"
+
+# Check SoundCloud client ID (optional, for enhanced matching)
+[ -f .env ] && grep -q "SOUNDCLOUD_CLIENT_ID" .env && echo "SoundCloud: configured" || echo "SoundCloud: not configured (optional)"
+```
+
+If any tool is missing, install with:
+```bash
+sudo apt update && sudo apt install ffmpeg python3
+```
+
+## SoundCloud Setup (Optional)
+
+For enhanced track matching:
+
+```bash
+cp .env.example .env
+# Edit .env and add your SoundCloud client ID
+```
+
+To get a client ID:
+1. Open https://soundcloud.com in your browser
+2. Play any track
+3. Open DevTools (F12) → Network tab
+4. Reload the page
+5. Find a request to `api-v2.soundcloud.com` with `?client_id=`
+6. Copy the `client_id` value and paste into `.env`
+
+## Quick Start
+
+```bash
+# One-line install (Linux/macOS)
+curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
+
+# Or run directly
+python3 organize_music.py [source_directory]
+
+# Dry-run mode (audit only)
+python3 organize_music.py --dry-run [source_directory]
+```
+
 ## Configuration
 - `config.json`: JSON file mapping genres and labels to target directories.
   - Keys can be comma-separated lists of genres or labels (e.g., "Techno, House").
@@ -48,6 +111,7 @@ If the target file already exists, the file is left in place and logged.
     - When mismatch detected → use filename artist/title for online lookups instead of wrong metadata.
     - Mismatch details included in result JSON under `metadata_mismatch` field.
 4. **Online Lookup**:
+    - SoundCloud (if client ID configured): Validates track match via confidence scoring
     - Query iTunes Search API (unified call for genre + label + album + year).
     - If iTunes returns electronic genre → use it directly (saves Bandcamp/MusicBrainz calls).
     - If iTunes returns no genre or non-electronic → fallback to Bandcamp search:
@@ -56,7 +120,7 @@ If the target file already exists, the file is left in place and logged.
     - If Bandcamp fails or returns no genre → fallback to MusicBrainz API:
          * Search for recording by artist and title.
          * Get the first release-group tags.
-    - Label lookup: iTunes (single detail call if needed), then Bandcamp fallback.
+    - Label lookup: SoundCloud (confidence match) → iTunes (single detail call if needed), then Bandcamp fallback.
     - Caching: All online lookups are cached to avoid repeated API calls.
     - If genre lookup fails → leave file, log as `lookup_failed`.
 5. **Label/Genre Normalization & Mapping**:
@@ -103,15 +167,51 @@ python3 organize_music.py -e [source_directory]
 ```
 
 ## Dependencies
-- `ffprobe` (from FFmpeg) for reading metadata.
-- Python 3.x (standard library: json, os, subprocess, pathlib, typing, urllib).
+- `ffprobe`/`ffmpeg` for reading/writing metadata.
+- Python 3.10+ (standard library: json, os, subprocess, pathlib, typing, urllib).
+- Optional: SoundCloud client ID in `.env` for enhanced matching.
 
 ## Extensibility
 - To add new genres, add entries to `config.json` genre_map.
 - The script already supports comma-separated genre keys for mapping multiple genres to the same destination.
 - Subgenre hierarchy is automatically recognized (e.g., "Electro House" maps to "House" if configured).
 
+## Release Workflow
+
+To create a new release:
+
+1. **Bump version** in `organize_mp3s/__init__.py`:
+   ```python
+   __version__ = "1.1.0"
+   ```
+
+2. **Commit and push**:
+   ```bash
+   git add -A && git commit -m "chore: bump version to 1.1.0"
+   git push
+   ```
+
+3. **Create tag and push**:
+   ```bash
+   git tag v1.1.0
+   git push --tags
+   ```
+
+This triggers GitHub Actions to build standalone binaries for Linux (amd64) and macOS (arm64, x86_64) with bundled ffmpeg.
+
+## Testing
+
+```bash
+# Run all tests
+python -m pytest tests/test_organize_music.py -v
+
+# Run specific test class
+python -m pytest tests/test_organize_music.py::TestSoundCloudCalculateMatchConfidence -v
+```
+
 ## Notes
 - The script uses a timeout of 5 seconds for `ffprobe` calls and 10 seconds for HTTP requests to prevent hanging.
 - All paths are resolved to absolute paths in the log files for clarity.
-- Online lookup relies on third-party APIs (iTunes and MusicBrainz) which have their own rate limits and availability.
+- Online lookup relies on third-party APIs (SoundCloud, iTunes, Bandcamp, MusicBrainz) which have their own rate limits and availability.
+- SoundCloud requires a client ID from `.env` file (optional but recommended for better matching).
+- Results are cached in-memory to avoid repeated API calls for the same track.

@@ -1,0 +1,27 @@
+[project]
+name = "organize-mp3s"
+dynamic = ["version"]
+description = "MP3/M4A organizer with genre/label-based folder sorting and online metadata lookup"
+authors = [
+    {name = "Holger Kampffmeyer", email = "holger.kampffmeyer+dj@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+organize-mp3s = "organize_music:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "organize_mp3s.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

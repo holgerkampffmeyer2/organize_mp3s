@@ -2077,5 +2077,294 @@ class TestOrganizeMusicMainFunction(unittest.TestCase):
                     self.assertRaises(SystemExit, organize_music.organize_music, "/test")
 
 
+class TestSoundCloudEnvLoading(unittest.TestCase):
+    """Tests for .env loading and SoundCloud client ID."""
+
+    def test_load_env_with_file(self):
+        """Test _load_env reads key=value pairs from .env."""
+        env_content = "# comment\nSOUNDCLOUD_CLIENT_ID=abc123\nOTHER=value\n"
+        with patch('builtins.open', mock_open(read_data=env_content)):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = organize_music._load_env()
+        self.assertEqual(result['SOUNDCLOUD_CLIENT_ID'], 'abc123')
+        self.assertEqual(result['OTHER'], 'value')
+
+    def test_load_env_no_file(self):
+        """Test _load_env returns empty dict when no .env exists."""
+        with patch('pathlib.Path.exists', return_value=False):
+            result = organize_music._load_env()
+        self.assertEqual(result, {})
+
+    def test_load_env_skips_comments(self):
+        """Test _load_env skips comment lines."""
+        env_content = "# This is a comment\nSOUNDCLOUD_CLIENT_ID=test\n"
+        with patch('builtins.open', mock_open(read_data=env_content)):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = organize_music._load_env()
+        self.assertEqual(result, {'SOUNDCLOUD_CLIENT_ID': 'test'})
+
+    def test_load_env_empty_lines(self):
+        """Test _load_env skips empty lines."""
+        env_content = "\n\nSOUNDCLOUD_CLIENT_ID=test\n\n\n"
+        with patch('builtins.open', mock_open(read_data=env_content)):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = organize_music._load_env()
+        self.assertEqual(result, {'SOUNDCLOUD_CLIENT_ID': 'test'})
+
+
+class TestLoadConfig(unittest.TestCase):
+    """Tests for load_config function."""
+
+    def setUp(self):
+        organize_music._config_cache = None
+
+    def tearDown(self):
+        organize_music._config_cache = None
+
+    def test_load_config_returns_dict(self):
+        """Test load_config returns a dict from config.json."""
+        config_data = {"genre_map": {"House": "House"}, "soundcloud_confidence_threshold": 0.6}
+        with patch('builtins.open', mock_open(read_data=json.dumps(config_data))):
+            with patch('pathlib.Path.exists', return_value=True):
+                result = organize_music.load_config()
+        self.assertEqual(result['soundcloud_confidence_threshold'], 0.6)
+
+    def test_load_config_caches(self):
+        """Test load_config caches result after first call."""
+        config_data = {"test": True}
+        with patch('builtins.open', mock_open(read_data=json.dumps(config_data))):
+            with patch('pathlib.Path.exists', return_value=True):
+                result1 = organize_music.load_config()
+                result2 = organize_music.load_config()
+        self.assertIs(result1, result2)
+
+    def test_load_config_missing_file(self):
+        """Test load_config returns empty dict when config.json missing."""
+        with patch('pathlib.Path.exists', return_value=False):
+            result = organize_music.load_config()
+        self.assertEqual(result, {})
+
+
+class TestSoundCloudCalculateMatchConfidence(unittest.TestCase):
+    """Tests for SoundCloud confidence scoring."""
+
+    def test_exact_match(self):
+        """Test confidence with exact artist and title match."""
+        score = organize_music.calculate_match_confidence("Artist", "Title", "Artist - Title")
+        self.assertGreater(score, 0.8)
+
+    def test_partial_match(self):
+        """Test confidence with partial match."""
+        score = organize_music.calculate_match_confidence("Artist Name", "Track Title", "Artist Name - Track Title Remix")
+        self.assertGreater(score, 0.5)
+
+    def test_no_match(self):
+        """Test confidence with completely different strings."""
+        score = organize_music.calculate_match_confidence("Artist", "Title", "Completely Different Song")
+        self.assertLess(score, 0.5)
+
+    def test_empty_found_title(self):
+        """Test confidence with empty found title."""
+        score = organize_music.calculate_match_confidence("Artist", "Title", "")
+        self.assertEqual(score, 0.0)
+
+    def test_empty_expected(self):
+        """Test confidence with empty expected values."""
+        score = organize_music.calculate_match_confidence("", "", "Some Track")
+        self.assertEqual(score, 1.0)
+
+    def test_multi_word_artist(self):
+        """Test confidence with multi-word artist name."""
+        score = organize_music.calculate_match_confidence("DJ Hulk", "Bass Drop", "DJ Hulk - Bass Drop")
+        self.assertGreater(score, 0.8)
+
+    def test_single_word_artist(self):
+        """Test confidence with single-word artist."""
+        score = organize_music.calculate_match_confidence("deadmau5", "Strobe", "deadmau5 - Strobe")
+        self.assertGreater(score, 0.8)
+
+
+class TestSoundCloudSearchApi(unittest.TestCase):
+    """Tests for search_soundcloud_api function."""
+
+    def setUp(self):
+        organize_music._soundcloud_cache.clear()
+
+    def test_no_client_id(self):
+        """Test returns empty list when no client ID."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', ''):
+            result = organize_music.search_soundcloud_api("test query")
+        self.assertEqual(result, [])
+
+    def test_successful_search(self):
+        """Test successful API search returns collection."""
+        mock_response = json.dumps({
+            'collection': [
+                {'title': 'Test Track', 'user': {'username': 'Test Artist'}, 'permalink_url': 'https://soundcloud.com/test'}
+            ]
+        }).encode()
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, '_fetch_url', return_value=mock_response.decode()):
+                result = organize_music.search_soundcloud_api("Test Artist Test Track")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['title'], 'Test Track')
+
+    def test_empty_response(self):
+        """Test returns empty list on empty response."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, '_fetch_url', return_value=None):
+                result = organize_music.search_soundcloud_api("query")
+        self.assertEqual(result, [])
+
+    def test_invalid_json(self):
+        """Test returns empty list on invalid JSON."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, '_fetch_url', return_value="not json"):
+                result = organize_music.search_soundcloud_api("query")
+        self.assertEqual(result, [])
+
+    def test_caching(self):
+        """Test results are cached."""
+        mock_response = json.dumps({'collection': [{'title': 'Test'}]}).encode()
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, '_fetch_url', return_value=mock_response.decode()) as mock_fetch:
+                organize_music.search_soundcloud_api("query")
+                organize_music.search_soundcloud_api("query")
+        self.assertEqual(mock_fetch.call_count, 1)
+
+
+class TestSoundCloudValidateClientId(unittest.TestCase):
+    """Tests for validate_soundcloud_client_id function."""
+
+    def test_no_client_id(self):
+        """Test returns False when no client ID set."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', ''):
+            self.assertFalse(organize_music.validate_soundcloud_client_id())
+
+    def test_valid_client_id(self):
+        """Test returns True for valid client ID."""
+        mock_response = json.dumps({'collection': [{'title': 'test'}]}).encode()
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'valid_id'):
+            with patch.object(organize_music, '_fetch_url', return_value=mock_response.decode()):
+                self.assertTrue(organize_music.validate_soundcloud_client_id())
+
+    def test_invalid_client_id(self):
+        """Test returns False for invalid client ID (API returns errors)."""
+        mock_response = json.dumps({'errors': [{'error_code': 'invalid'}]}).encode()
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'invalid_id'):
+            with patch.object(organize_music, '_fetch_url', return_value=mock_response.decode()):
+                self.assertFalse(organize_music.validate_soundcloud_client_id())
+
+    def test_network_failure(self):
+        """Test returns False on network failure."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, '_fetch_url', return_value=None):
+                self.assertFalse(organize_music.validate_soundcloud_client_id())
+
+
+class TestSoundCloudTryResult(unittest.TestCase):
+    """Tests for try_soundcloud_api_result function."""
+
+    def setUp(self):
+        self.config = {'soundcloud_confidence_threshold': 0.6}
+
+    def test_matching_track(self):
+        """Test returns enriched dict for matching track."""
+        track = {
+            'title': 'Test Artist - Test Track',
+            'user': {'username': 'Test Artist'},
+            'permalink_url': 'https://soundcloud.com/test',
+            'artwork_url': 'https://i1.sndcdn.com/test-large.jpg',
+        }
+        result = organize_music.try_soundcloud_api_result(track, 'Test Artist', 'Test Track', self.config)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['artist'], 'Test Artist')
+        self.assertEqual(result['title'], 'Test Artist - Test Track')
+        self.assertGreater(result['confidence'], 0.6)
+
+    def test_non_matching_track(self):
+        """Test returns None for non-matching track."""
+        track = {
+            'title': 'Completely Different Song',
+            'user': {'username': 'Other Artist'},
+            'permalink_url': 'https://soundcloud.com/other',
+        }
+        result = organize_music.try_soundcloud_api_result(track, 'Test Artist', 'Test Track', self.config)
+        self.assertIsNone(result)
+
+    def test_empty_title(self):
+        """Test returns None for empty API title."""
+        track = {'title': '', 'user': {'username': 'Artist'}}
+        result = organize_music.try_soundcloud_api_result(track, 'Artist', 'Track', self.config)
+        self.assertIsNone(result)
+
+    def test_high_confidence_threshold(self):
+        """Test returns None when below high threshold."""
+        track = {
+            'title': 'Completely Different Song Title',
+            'user': {'username': 'Other Artist'},
+        }
+        config = {'soundcloud_confidence_threshold': 0.95}
+        result = organize_music.try_soundcloud_api_result(track, 'Test Artist', 'Test Track', config)
+        self.assertIsNone(result)
+
+    def test_default_threshold(self):
+        """Test uses default threshold of 0.6 when not in config."""
+        track = {
+            'title': 'Test Artist - Test Track',
+            'user': {'username': 'Test Artist'},
+        }
+        result = organize_music.try_soundcloud_api_result(track, 'Test Artist', 'Test Track', {})
+        self.assertIsNotNone(result)
+        self.assertGreater(result['confidence'], 0.6)
+
+    def test_returns_url_and_confidence(self):
+        """Test returns dict with url and confidence keys."""
+        track = {
+            'title': 'Test Artist - Test Track',
+            'user': {'username': 'Test Artist'},
+            'permalink_url': 'https://soundcloud.com/test',
+            'artwork_url': 'https://i1.sndcdn.com/test-large.jpg',
+        }
+        result = organize_music.try_soundcloud_api_result(track, 'Test Artist', 'Test Track', self.config)
+        self.assertIsNotNone(result)
+        self.assertIn('url', result)
+        self.assertIn('confidence', result)
+        self.assertEqual(result['url'], 'https://soundcloud.com/test')
+
+
+class TestSoundCloudLookup(unittest.TestCase):
+    """Tests for _lookup_soundcloud function."""
+
+    def setUp(self):
+        organize_music._soundcloud_cache.clear()
+
+    def test_no_client_id(self):
+        """Test returns (None, None) when no client ID."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', ''):
+            result = organize_music._lookup_soundcloud("Artist", "Title")
+        self.assertEqual(result, (None, None))
+
+    def test_no_results(self):
+        """Test returns (None, None) when no API results."""
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, 'search_soundcloud_api', return_value=[]):
+                result = organize_music._lookup_soundcloud("Artist", "Title")
+        self.assertEqual(result, (None, None))
+
+    def test_matching_result(self):
+        """Test returns (artist, title) for matching result."""
+        mock_track = {
+            'title': 'Test Artist - Test Track',
+            'user': {'username': 'Test Artist'},
+            'permalink_url': 'https://soundcloud.com/test',
+        }
+        with patch.object(organize_music, 'SOUNDCLOUD_CLIENT_ID', 'test_id'):
+            with patch.object(organize_music, 'search_soundcloud_api', return_value=[mock_track]):
+                with patch.object(organize_music, 'load_config', return_value={'soundcloud_confidence_threshold': 0.6}):
+                    result = organize_music._lookup_soundcloud("Test Artist", "Test Track")
+        self.assertEqual(result, ('Test Artist', 'Test Artist - Test Track'))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -15,9 +15,54 @@ import subprocess
 import sys
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import urllib.parse
 import urllib.request
+
+
+def get_config_dir() -> Path:
+    """Return config directory: ~/.config/organize-mp3s/ for bundles, project root for scripts."""
+    if getattr(sys, 'frozen', False):
+        config_dir = Path.home() / '.config' / 'organize-mp3s'
+    else:
+        config_dir = Path(__file__).parent
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+def _load_env() -> dict:
+    """Load environment variables from .env file in config directory."""
+    env_path = get_config_dir() / '.env'
+    env_vars = {}
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if '=' in line:
+                        key, _, value = line.partition('=')
+                        env_vars[key.strip()] = value.strip()
+    return env_vars
+
+
+_env = _load_env()
+SOUNDCLOUD_CLIENT_ID: str = _env.get('SOUNDCLOUD_CLIENT_ID', '')
+SEARCH_TIMEOUT = 10
+
+_config_cache = None
+
+def load_config() -> Dict:
+    """Load config.json from the script's directory. Cached after first load."""
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
+    config_path = Path(__file__).parent / 'config.json'
+    if config_path.exists():
+        with open(config_path) as f:
+            _config_cache = json.load(f)
+    else:
+        _config_cache = {}
+    return _config_cache
 
 
 def _extract_all_metadata(file_path: Path) -> Dict[str, Optional[str]]:
@@ -164,8 +209,8 @@ def get_genre_from_metadata(file_path: Path) -> Optional[str]:
 
 def lookup_label_online(artist: str, title: str) -> Optional[str]:
     """
-    Lookup label via online services (iTunes primary with track ID lookup).
-    Falls back to Bandcamp if iTunes fails.
+    Lookup label via online services.
+    Source chain: SoundCloud (confidence match) -> iTunes -> Bandcamp
     
     Args:
         artist: Artist name
@@ -177,7 +222,13 @@ def lookup_label_online(artist: str, title: str) -> Optional[str]:
     cache_key = f"{artist.lower()}:{title.lower()}"
     if cache_key in _label_cache:
         return _label_cache[cache_key]
-    
+
+    # SoundCloud: validates match via confidence scoring
+    if SOUNDCLOUD_CLIENT_ID:
+        sc_artist, sc_title = _lookup_soundcloud(artist, title)
+        if sc_artist:
+            logger.debug(f"  SoundCloud confirmed track match for label: {sc_artist} - {sc_title}")
+
     itunes_data = _lookup_itunes_all_metadata(artist, title)
     if itunes_data.get('label'):
         _label_cache[cache_key] = itunes_data['label']
@@ -308,6 +359,181 @@ def get_genre_from_metadata(file_path: Path) -> Optional[str]:
 _genre_cache = {}
 _label_cache = {}
 _bandcamp_cache = {}
+_soundcloud_cache = {}
+
+
+def _fetch_url(url: str, timeout: int = SEARCH_TIMEOUT) -> Optional[str]:
+    """Fetch URL content with timeout and error handling."""
+    try:
+        request = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode('utf-8', errors='ignore')
+    except Exception:
+        return None
+
+
+def validate_soundcloud_client_id() -> bool:
+    """Validate SoundCloud client ID with a lightweight API probe."""
+    if not SOUNDCLOUD_CLIENT_ID:
+        return False
+
+    url = (f"https://api-v2.soundcloud.com/search/tracks"
+           f"?q=test&client_id={SOUNDCLOUD_CLIENT_ID}&limit=1")
+    content = _fetch_url(url, timeout=10)
+    if not content:
+        logger.warning(
+            "SoundCloud client ID validation failed — no response. "
+            "SoundCloud metadata lookup will be unavailable."
+        )
+        return False
+
+    try:
+        data = json.loads(content)
+        if 'collection' in data:
+            return True
+        if data.get('errors'):
+            logger.warning(
+                "SoundCloud client ID is invalid or expired (API returned errors). "
+                "To fix: open SoundCloud in your browser, play a track, open DevTools "
+                "(F12) → Network tab, reload, find a request with '?client_id=', "
+                "copy the client_id value and update .env: "
+                "SOUNDCLOUD_CLIENT_ID=<new_id>"
+            )
+            return False
+    except json.JSONDecodeError:
+        pass
+
+    logger.warning(
+        "SoundCloud client ID validation failed — unexpected response. "
+        "SoundCloud metadata lookup will be unavailable."
+    )
+    return False
+
+
+def search_soundcloud_api(query: str, limit: int = 5) -> list:
+    """Search SoundCloud via API v2. Returns list of track result dicts."""
+    if not SOUNDCLOUD_CLIENT_ID:
+        return []
+
+    cache_key = f"sc:{query.lower()}:{limit}"
+    if cache_key in _soundcloud_cache:
+        return _soundcloud_cache[cache_key]
+
+    url = (f"https://api-v2.soundcloud.com/search/tracks"
+           f"?q={urllib.parse.quote(query)}&client_id={SOUNDCLOUD_CLIENT_ID}&limit={limit}")
+    content = _fetch_url(url)
+    if not content:
+        _soundcloud_cache[cache_key] = []
+        return []
+
+    try:
+        data = json.loads(content)
+        results = data.get('collection', [])
+        _soundcloud_cache[cache_key] = results
+        return results
+    except json.JSONDecodeError:
+        _soundcloud_cache[cache_key] = []
+        return []
+
+
+def calculate_match_confidence(expected_artist: str, expected_title: str, found_track_title: str) -> float:
+    """Calculate confidence (0.0-1.0) that found_track_title matches expected artist/title.
+
+    Uses word-level containment for multi-word names and
+    falls back to SequenceMatcher fuzzy ratio for single-word or partial matches.
+    """
+    if not found_track_title:
+        return 0.0
+
+    found_lower = found_track_title.lower()
+    expected_artist = (expected_artist or '').strip()
+    expected_title = (expected_title or '').strip()
+
+    def _score(expected: str) -> float:
+        if not expected:
+            return 1.0
+        expected_lower = expected.lower()
+        words = expected_lower.split()
+        if len(words) >= 2:
+            matches = sum(1 for w in words if w in found_lower)
+            word_score = matches / len(words)
+        else:
+            word_score = 1.0 if expected_lower in found_lower else 0.0
+        fuzzy = SequenceMatcher(None, expected_lower, found_lower).ratio()
+        return max(word_score, fuzzy)
+
+    scores = [_score(expected_artist), _score(expected_title)]
+    return (scores[0] + scores[1]) / 2
+
+
+def try_soundcloud_api_result(track: dict, expected_artist: str, expected_title: str,
+                              config: Optional[Dict] = None) -> Optional[Dict]:
+    """Validate a SoundCloud API track result with confidence scoring.
+
+    Returns enriched dict with title, artist, url, confidence.
+    """
+    if config is None:
+        config = load_config()
+
+    api_title = track.get('title', '')
+    uploader = track.get('user', {}).get('username', '') if track.get('user') else ''
+    permalink = track.get('permalink_url', '')
+
+    if not api_title:
+        return None
+
+    confidence = calculate_match_confidence(expected_artist, expected_title, api_title)
+    threshold = config.get('soundcloud_confidence_threshold', 0.6)
+
+    if confidence >= threshold:
+        return {
+            'title': api_title,
+            'artist': uploader,
+            'url': permalink,
+            'confidence': confidence,
+        }
+
+    logger.debug(f"  SoundCloud API confidence {confidence:.2f} < {threshold}")
+    return None
+
+
+def _lookup_soundcloud(artist: str, title: str, config: Optional[Dict] = None) -> Tuple[Optional[str], Optional[str]]:
+    """Lookup track on SoundCloud via API v2 with confidence scoring.
+
+    Returns (artist, title) or (None, None).
+    """
+    if not SOUNDCLOUD_CLIENT_ID or not artist or not title:
+        return None, None
+
+    query = f"{artist} {title}"
+    results = search_soundcloud_api(query)
+    if not results:
+        logger.debug(f"  SoundCloud: no API results for '{artist} - {title}'")
+        return None, None
+
+    if config is None:
+        config = load_config()
+    for track in results:
+        result = try_soundcloud_api_result(track, artist, title, config)
+        if result:
+            logger.debug(f"  SoundCloud found: {result['artist']} - {result['title']} (confidence {result['confidence']:.2f})")
+            return result['artist'], result['title']
+
+    return None, None
+
+
+def _lookup_soundcloud_genre(artist: str, title: str) -> Optional[str]:
+    """Lookup genre on SoundCloud. SoundCloud doesn't expose genre directly,
+    so we return None — the caller falls through to the next source."""
+    return None
+
+
+def _lookup_soundcloud_label(artist: str, title: str) -> Optional[str]:
+    """Lookup label on SoundCloud. SoundCloud doesn't expose label directly,
+    so we return None — the caller falls through to the next source."""
+    return None
 
 def _is_electronic_genre(genre: str) -> bool:
     """Check if a genre is likely electronic music."""
@@ -656,12 +882,18 @@ def _normalize_genre(genre: str) -> str:
 def get_genre_online(artist: str, title: str) -> Optional[str]:
     """
     Lookup genre via online services with improved accuracy for electronic music.
-    Uses unified iTunes lookup to avoid redundant API calls.
+    Source chain: SoundCloud (confidence match) -> iTunes -> Bandcamp -> MusicBrainz
     """
     cache_key = f"{artist.lower()}:{title.lower()}"
     if cache_key in _genre_cache:
         return _genre_cache[cache_key]
-    
+
+    # SoundCloud: validates match via confidence scoring (genre itself is not returned)
+    if SOUNDCLOUD_CLIENT_ID:
+        sc_artist, sc_title = _lookup_soundcloud(artist, title)
+        if sc_artist:
+            logger.debug(f"  SoundCloud confirmed track match: {sc_artist} - {sc_title}")
+
     itunes_data = _lookup_itunes_all_metadata(artist, title)
     itunes_genre = itunes_data.get('genre')
     
@@ -1400,15 +1632,38 @@ def organize_music(source_dir: str = ".", dry_run: bool = False, enrich_metadata
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Organize MP3/M4A files by genre or label")
-    parser.add_argument("source_directory", nargs="?", default=".", 
+    parser.add_argument("source_directory", nargs="?", default=".",
                        help="Directory to scan for audio files (default: current directory)")
     parser.add_argument("--dry-run", "-n", action="store_true",
                        help="Only show what would be done, don't actually move files")
     parser.add_argument("--enrich-metadata", "-e", action="store_true",
                        help="Enrich missing metadata tags from online sources (label, genre, album, year)")
-    
+
     args = parser.parse_args()
-    
+
+    if SOUNDCLOUD_CLIENT_ID:
+        validate_soundcloud_client_id()
+
+    organize_music(args.source_directory, args.dry_run, args.enrich_metadata)
+
+
+def main():
+    """Entry point for pyproject.toml console_scripts."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Organize MP3/M4A files by genre or label")
+    parser.add_argument("source_directory", nargs="?", default=".",
+                       help="Directory to scan for audio files (default: current directory)")
+    parser.add_argument("--dry-run", "-n", action="store_true",
+                       help="Only show what would be done, don't actually move files")
+    parser.add_argument("--enrich-metadata", "-e", action="store_true",
+                       help="Enrich missing metadata tags from online sources (label, genre, album, year)")
+
+    args = parser.parse_args()
+
+    if SOUNDCLOUD_CLIENT_ID:
+        validate_soundcloud_client_id()
+
     organize_music(args.source_directory, args.dry_run, args.enrich_metadata)

@@ -34,6 +34,10 @@
   },
   "label_source_tag": "label",
   "fuzzy_threshold": 0.8,
+  "soundcloud_confidence_threshold": 0.6,
   "enrich_metadata": false,
-  "move": true
+  "move": true,
+  "metadata": {
+    "sources": ["soundcloud", "itunes", "bandcamp", "musicbrainz"]
+  }
 }

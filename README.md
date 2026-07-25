@@ -3,10 +3,20 @@
 ![Illustration](./assets/organize_mp3s.png)
 
 ![Test](https://github.com/holgerkampffmeyer2/organize_mp3s/actions/workflows/test.yml/badge.svg?branch=main)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://github.com/holgerkampffmeyer2/organize_mp3s)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/holgerkampffmeyer2/organize_mp3s)
 [![License](https://img.shields.io/github/license/holgerkampffmeyer2/organize_mp3s)](https://github.com/holgerkampffmeyer2/organize_mp3s)
 
 AI-agent driven MP3/M4A organization with online genre lookup, metadata-based sorting, and configurable destination mapping. Designed to be controlled by AI coding assistants like [opencode](https://opencode.ai) or Claude Code.
+
+## Quick Start
+
+```bash
+# One-line install (Linux/macOS)
+curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
+
+# Or run directly
+python3 organize_music.py [source_directory]
+```
 
 ## How It Works
 
@@ -18,10 +28,11 @@ AI Agent reads AGENT.md → Pre-flight Check → Executes organize_music.py → 
 
 The agent handles:
 - Prerequisites check (ffmpeg, python3)
+- SoundCloud client ID validation (optional, for enhanced matching)
 - File discovery and batch processing decisions
 - Metadata extraction from files
-- Online genre lookup: iTunes → Bandcamp → MusicBrainz
-- Online label lookup: iTunes (when metadata missing), Bandcamp fallback
+- Online genre lookup: SoundCloud (confidence match) → iTunes → Bandcamp → MusicBrainz
+- Online label lookup: SoundCloud (confidence match) → iTunes → Bandcamp
 - Error recovery and retries
 - Verification of organization results
 
@@ -65,12 +76,14 @@ sudo apt install ffmpeg python3
 ## Technical Details
 
 - **Metadata Source**: Artist and title from file metadata (single ffprobe call); Label from file metadata or online lookup
-- **Genre/Label Lookup**: iTunes Search API (primary, single unified call), Bandcamp (fallback), MusicBrainz (tags)
-- **Label Lookup**: iTunes Search API (when metadata missing, with track ID lookup), Bandcamp fallback
+- **SoundCloud Integration**: Optional client ID in `.env` for enhanced track matching via confidence scoring (validates artist/title match before using other sources)
+- **Genre/Label Lookup**: SoundCloud (confidence match) → iTunes Search API (primary, single unified call) → Bandcamp (fallback) → MusicBrainz (tags)
+- **Label Lookup**: SoundCloud (confidence match) → iTunes Search API (when metadata missing, with track ID lookup) → Bandcamp fallback
+- **Confidence Scoring**: SoundCloud results validated with word-level containment + fuzzy matching (configurable threshold, default 0.6)
 - **Sorting Priority**: Label mapping first, then Genre mapping as fallback
 - **Early-Exit Optimization**: When label already maps to destination, genre lookup is skipped (saves API calls)
 - **Subgenre Hierarchy**: Subgenres automatically map to parent genres (e.g., "Electro House" → "House")
-- **Fuzzy Genre Matching**: Configurable threshold (default 0.6) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
+- **Fuzzy Genre Matching**: Configurable threshold (default 0.8) with 30+ genre synonyms (e.g., "hip hop" → "Hip-Hop/Rap", "dnb" → "Drum n Bass")
 - **Metadata Mismatch Detection**: Compares metadata artist/title against filename using fuzzy matching. When mismatch detected (similarity < 0.6), uses filename values for online lookups instead of wrong metadata. Mismatch details logged with similarity scores and included in result JSON.
 - **Metadata Enrichment**: Optional feature to write missing metadata (label, genre, album, year) from online sources back to audio files (via CLI `--enrich-metadata` or config `enrich_metadata: true`)
 - **Move Control**: Configurable `move: true|false` option to enable/disable file movement (default: true). When `move: false`, the script determines destinations but doesn't move files.
@@ -82,7 +95,18 @@ sudo apt install ffmpeg python3
 
 ## Configuration
 
-Create a `config.json` file in the same directory as the script:
+### SoundCloud Setup (Optional)
+
+For enhanced track matching via SoundCloud API:
+
+```bash
+cp .env.example .env
+# Edit .env and add your SoundCloud client ID
+```
+
+To get a client ID: Open SoundCloud in your browser, play a track, open DevTools (F12) → Network tab, reload, find a request with `?client_id=`, copy the value.
+
+### config.json
 
 ```json
 {
@@ -98,8 +122,12 @@ Create a `config.json` file in the same directory as the script:
   },
   "label_source_tag": "label",
   "fuzzy_threshold": 0.8,
+  "soundcloud_confidence_threshold": 0.6,
   "enrich_metadata": false,
-  "move": true
+  "move": true,
+  "metadata": {
+    "sources": ["soundcloud", "itunes", "bandcamp", "musicbrainz"]
+  }
 }
 ```
 
@@ -108,22 +136,58 @@ Create a `config.json` file in the same directory as the script:
 - If `label_source_tag` is provided, the script will try to read that specific tag (and its uppercase variant) for the label.
 - If `label_source_tag` is not provided, the script checks common label-related tags: 'label', 'Label', 'TPUB', 'publisher'.
 - **Subgenre Support**: Subgenres like "Electro House", "Progressive House", "Dance", "Electronic" automatically map to "House" if configured.
+- **SoundCloud**: Set `soundcloud_confidence_threshold` (default 0.6) to control how strict SoundCloud matching is.
+- **Metadata Sources**: `metadata.sources` controls the lookup order (default: SoundCloud → iTunes → Bandcamp → MusicBrainz).
 
 ## File Structure
 
 ```
 organize_mp3s/
-├── AGENTS.md          # AI agent workflow instructions (this file)
-├── README.md          # This file
-├── organize_music.py  # Python organizer script
-├── config.json        # Genre to folder mapping
-├── tests/             # Unit tests
-│   ├── __init__.py
+├── .github/workflows/   # CI/CD workflows
+│   ├── test.yml         # Unit tests on push/PR
+│   └── release.yml      # Build binaries + GitHub Release
+├── organize_mp3s/       # Python package
+│   └── __init__.py      # Version
+├── pyinstaller/         # PyInstaller build config
+│   └── organize.spec
+├── tests/               # Unit tests
 │   └── test_organize_music.py
-├── *.mp3              # Source MP3 files
-├── *.m4a              # Source M4A files
-└── organization_*.json # Log files (generated)
+├── assets/              # Images
+├── .env.example         # SoundCloud client ID template
+├── .gitignore
+├── AGENTS.md            # AI agent workflow instructions
+├── README.md            # This file
+├── LICENSE              # MIT
+├── config.json          # Genre/label to folder mapping
+├── install.sh           # One-line install script
+├── organize_music.py    # Main organizer script
+├── pyproject.toml       # Python package config
+├── *.mp3 / *.m4a        # Source files
+└── organization_*.json  # Log files (generated)
 ```
+
+## Release Workflow
+
+To create a new release:
+
+1. **Bump version** in `organize_mp3s/__init__.py`:
+   ```python
+   __version__ = "1.1.0"
+   ```
+
+2. **Commit and push**:
+   ```bash
+   git add -A && git commit -m "chore: bump version to 1.1.0"
+   git push
+   ```
+
+3. **Create tag and push**:
+   ```bash
+   git tag v1.1.0
+   git push --tags
+   ```
+
+This triggers the GitHub Actions `release.yml` workflow which builds standalone binaries for Linux (amd64) and macOS (arm64, x86_64) with bundled ffmpeg.
 
 ## For AI Agents
 
