@@ -60,14 +60,18 @@ To get a client ID:
 ## Quick Start
 
 ```bash
-# One-line install (Linux/macOS)
+# One-line install (Linux/macOS): installs the standalone binary
+# `organize-mp3s` (with bundled ffmpeg) to /usr/local/bin
 curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
 
-# Or run directly
-python3 organize_music.py [source_directory]
+# Installed binary usage
+organize-mp3s [source_directory]
 
 # Dry-run mode (audit only)
-python3 organize_music.py --dry-run [source_directory]
+organize-mp3s --dry-run [source_directory]
+
+# Or run directly from the repo (same flags)
+python3 organize_music.py [source_directory]
 ```
 
 ## Configuration
@@ -151,19 +155,22 @@ python3 organize_music.py --dry-run [source_directory]
     - If enrichment enabled, also logs `enriched_tags` array with tags that were written to file.
 
 ## Usage
+
+Using the installed binary (`organize-mp3s`) or `python3 organize_music.py` from the repo — both support the same flags:
+
 ```bash
 # Normal mode (actually moves files)
-python3 organize_music.py [source_directory]
+organize-mp3s [source_directory]
 
 # Dry-run mode (only shows what would be done)
-python3 organize_music.py --dry-run [source_directory]
+organize-mp3s --dry-run [source_directory]
 # or
-python3 organize_music.py -n [source_directory]
+organize-mp3s -n [source_directory]
 
 # Metadata enrichment mode (writes missing metadata tags from online sources to files)
-python3 organize_music.py --enrich-metadata [source_directory]
+organize-mp3s --enrich-metadata [source_directory]
 # or
-python3 organize_music.py -e [source_directory]
+organize-mp3s -e [source_directory]
 ```
 
 ## Dependencies
@@ -180,7 +187,7 @@ python3 organize_music.py -e [source_directory]
 
 To create a new release:
 
-1. **Bump version** in `organize_mp3s/__init__.py`:
+1. **Bump version** in `organize_mp3s/__init__.py` (single source of truth):
    ```python
    __version__ = "1.1.0"
    ```
@@ -197,7 +204,18 @@ To create a new release:
    git push --tags
    ```
 
-This triggers GitHub Actions to build standalone binaries for Linux (amd64) and macOS (arm64, x86_64) with bundled ffmpeg.
+This triggers the GitHub Actions `release.yml` workflow which:
+- Builds standalone binaries for Linux (amd64) and macOS (arm64, x86_64)
+- Bundles static ffmpeg in each binary
+- Creates a GitHub Release with all 3 archives
+
+Users can then install the tool with the one-line installer (no Python or ffmpeg required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
+```
+
+The version is defined only in `organize_mp3s/__init__.py`. `pyproject.toml` reads it dynamically via `[tool.setuptools.dynamic]`.
 
 ## Testing
 

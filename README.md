@@ -8,24 +8,39 @@
 
 AI-agent driven MP3/M4A organization with online genre lookup, metadata-based sorting, and configurable destination mapping. Designed to be controlled by AI coding assistants like [opencode](https://opencode.ai) or Claude Code.
 
-## Quick Start
+## Installation
+
+### One-Line Install (Recommended)
 
 ```bash
-# One-line install (Linux/macOS)
 curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
 ```
 
+Detects your platform (Linux/macOS), downloads the matching standalone binary (with bundled ffmpeg) from the latest [GitHub Release](https://github.com/holgerkampffmeyer2/organize_mp3s/releases), and installs it to `/usr/local/bin`. No Python or ffmpeg installation required.
+
+Custom install directory:
 ```bash
-# Or run directly
-python3 organize_music.py [source_directory]
+INSTALL_DIR=~/bin curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
 ```
+
+### From Source (Experts)
+
+Requires Python 3.10+, ffmpeg, and ffprobe.
+
+```bash
+git clone https://github.com/holgerkampffmeyer2/organize_mp3s.git
+cd organize_mp3s
+pip install -e .
+```
+
+The installed binary is `organize-mp3s`.
 
 ## How It Works
 
-An AI agent reads `AGENT.md` and executes the organization workflow:
+An AI agent reads `AGENTS.md` and executes the organization workflow:
 
 ```
-AI Agent reads AGENT.md → Pre-flight Check → Executes organize_music.py → Monitors results → Verifies output
+AI Agent reads AGENTS.md → Pre-flight Check → Executes organize_music.py → Monitors results → Verifies output
 ```
 
 The agent handles:
@@ -45,25 +60,27 @@ The agent handles:
 Open an AI coding assistant in this directory and prompt:
 
 ```
-Organize all MP3 and M4A files using the workflow from AGENT.md.
+Organize all MP3 and M4A files using the workflow from AGENTS.md.
 ```
 
 ### Via Command Line
 
 ```bash
 # Normal mode (actually moves files)
-python3 organize_music.py [source_directory]
+organize-mp3s [source_directory]
 
 # Dry-run mode (only shows what would be done, no files moved)
-python3 organize_music.py --dry-run [source_directory]
+organize-mp3s --dry-run [source_directory]
 # or
-python3 organize_music.py -n [source_directory]
+organize-mp3s -n [source_directory]
 
 # Metadata enrichment mode (enriches missing metadata tags from online sources)
-python3 organize_music.py --enrich-metadata [source_directory]
+organize-mp3s --enrich-metadata [source_directory]
 # or
-python3 organize_music.py -e [source_directory]
+organize-mp3s -e [source_directory]
 ```
+
+Running from the repository works the same way, e.g. `python3 organize_music.py --dry-run .`
 
 - `source_directory`: The directory to scan for audio files (defaults to current directory if not provided).
 - The script will create `organization_results.json` (normal mode) or `organization_audit.json` (dry-run) in the source directory.
@@ -168,11 +185,27 @@ organize_mp3s/
 └── organization_*.json  # Log files (generated)
 ```
 
+## Building from Source
+
+```bash
+# Install build dependencies
+pip install pyinstaller
+
+# Place a static ffmpeg binary at pyinstaller/ffmpeg (or set FFMPEG_PATH)
+# to bundle it into the binary.
+
+# Build standalone binary
+pyinstaller pyinstaller/organize.spec
+
+# Binary is in dist/organize-mp3s/
+./dist/organize-mp3s/organize-mp3s --help
+```
+
 ## Release Workflow
 
 To create a new release:
 
-1. **Bump version** in `organize_mp3s/__init__.py`:
+1. **Bump version** in `organize_mp3s/__init__.py` (single source of truth):
    ```python
    __version__ = "1.1.0"
    ```
@@ -189,7 +222,18 @@ To create a new release:
    git push --tags
    ```
 
-This triggers the GitHub Actions `release.yml` workflow which builds standalone binaries for Linux (amd64) and macOS (arm64, x86_64) with bundled ffmpeg.
+This triggers the GitHub Actions `release.yml` workflow which:
+- Builds standalone binaries for Linux (amd64) and macOS (arm64, x86_64)
+- Bundles static ffmpeg in each binary
+- Creates a GitHub Release with all 3 archives
+
+Users can then install the tool with the one-line installer (no Python or ffmpeg required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/holgerkampffmeyer2/organize_mp3s/main/install.sh | bash
+```
+
+The version is defined only in `organize_mp3s/__init__.py`. `pyproject.toml` reads it dynamically via `[tool.setuptools.dynamic]`.
 
 ## For AI Agents
 
